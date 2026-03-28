@@ -1,0 +1,12 @@
+{
+  "name": "@arb/cex-dex-scanner",
+  "version": "1.0.0",
+  "description": "High Frequency Binance Volatility Scanner mapping to EVM AMMs",
+  "main": "index.js",
+  "dependencies": {
+    "ws": "^8.16.0",
+    "@arb/config": "*",
+    "@arb/telemetry": "*",
+    "@arb/trade-decision-engine": "*"
+  }
+}

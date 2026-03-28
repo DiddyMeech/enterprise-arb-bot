@@ -1,0 +1,12 @@
+{
+  "name": "enterprise-arb-daily-tuner",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@arb/config": "file:../../packages/config",
+    "@arb/telemetry": "file:../../packages/telemetry",
+    "@arb/learning-engine": "file:../../packages/learning-engine",
+    "node-cron": "^3.0.3"
+  }
+}

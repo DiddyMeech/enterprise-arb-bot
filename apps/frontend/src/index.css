@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+:root {
+  --bg-dark: #0a0f18;
+  --glass-bg: rgba(20, 30, 48, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --accent-cyan: #00f0ff;
+  --accent-green: #39ff14;
+  --accent-red: #ff003c;
+  --text-primary: #ffffff;
+  --text-secondary: #8b9bb4;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  background-image: 
+    radial-gradient(circle at 10% 20%, rgba(0, 240, 255, 0.05), transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(57, 255, 20, 0.05), transparent 40%);
+  min-height: 100vh;
+}
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.glow-text-cyan {
+  text-shadow: 0 0 15px rgba(0, 240, 255, 0.6);
+  color: var(--accent-cyan);
+}
+
+.glow-text-green {
+  text-shadow: 0 0 15px rgba(57, 255, 20, 0.6);
+  color: var(--accent-green);
+}
+
+.glow-text-red {
+  color: var(--accent-red);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+  padding: 1rem;
+  border-bottom: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+td {
+  padding: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  font-size: 0.95rem;
+}
+
+tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}

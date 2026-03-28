@@ -1,0 +1,128 @@
+version: 1
+
+mode:
+  bot_mode: LIVE
+  execution_enabled: true
+  allow_live_broadcast: true
+
+chains:
+  arbitrum:
+    enabled: true
+    baseline_trade_size_usd: 100000
+    min_net_profit_usd: 40
+    target_net_profit_usd: 100
+    max_gas_share_of_profit: 0.30
+    max_slippage_bps: 30
+    max_quote_age_ms: 700
+    max_price_impact_bps: 25
+    max_route_hops: 3
+    provider_divergence_bps: 10
+    pool_min_age_hours: 168
+    daily_loss_cap_usd: 250
+    daily_gas_burn_cap_usd: 100
+    consecutive_fail_pause_count: 5
+    baseline_score_threshold: 0.00
+    score_small_threshold: 0.55
+    score_medium_threshold: 0.70
+    score_full_threshold: 0.85
+
+  base:
+    enabled: true
+    baseline_trade_size_usd: 100000
+    min_net_profit_usd: 40
+    target_net_profit_usd: 100
+    max_gas_share_of_profit: 0.30
+    max_slippage_bps: 30
+    max_quote_age_ms: 650
+    max_price_impact_bps: 25
+    max_route_hops: 3
+    provider_divergence_bps: 10
+    pool_min_age_hours: 168
+    daily_loss_cap_usd: 250
+    daily_gas_burn_cap_usd: 100
+    consecutive_fail_pause_count: 5
+    baseline_score_threshold: 0.00
+    score_small_threshold: 0.55
+    score_medium_threshold: 0.70
+    score_full_threshold: 0.85
+
+  bsc:
+    enabled: true
+    baseline_trade_size_usd: 500
+    min_net_profit_usd: 40
+    target_net_profit_usd: 100
+    max_gas_share_of_profit: 0.30
+    max_slippage_bps: 30
+    max_quote_age_ms: 700
+    max_price_impact_bps: 25
+    max_route_hops: 3
+    provider_divergence_bps: 10
+    pool_min_age_hours: 168
+    daily_loss_cap_usd: 250
+    daily_gas_burn_cap_usd: 100
+    consecutive_fail_pause_count: 5
+    baseline_score_threshold: 0.00
+    score_small_threshold: 0.55
+    score_medium_threshold: 0.70
+    score_full_threshold: 0.85
+
+tokens:
+  allowlist:
+    - WETH
+    - USDC
+    - USDT
+    - WBTC
+    - WBNB
+
+pairs:
+  approved:
+    - WETH/USDC
+    - WETH/USDT
+    - WBTC/WETH
+    - WBNB/USDT
+    - WBNB/USDC
+
+risk:
+  min_profit_floor_usd: 40
+  target_profit_floor_usd: 100
+  max_route_hops: 3
+  max_provider_divergence_bps: 10
+  max_quote_to_fill_drift_bps: 20
+  max_slippage_bps: 30
+  max_price_impact_bps: 25
+  max_gas_share_of_profit: 0.30
+  pool_min_age_hours: 168
+  route_blacklist_failures_short_window: 3
+  route_blacklist_failures_long_window: 5
+  blacklist_short_minutes: 30
+  blacklist_medium_minutes: 180
+  blacklist_long_minutes: 1440
+
+sizing:
+  tiny_multiplier: 1.00
+  small_multiplier: 1.00
+  medium_multiplier: 1.00
+  full_multiplier: 1.00
+  scale_up_requires_realized_wins: false
+  immediate_scale_down_on_instability: false
+
+learning:
+  enabled: true
+  min_samples_for_route_confidence: 10
+  min_samples_for_pair_confidence: 20
+  daily_adjustment_enabled: true
+  max_daily_profit_threshold_adjustment_pct: 0.10
+  max_daily_size_adjustment_pct: 0.10
+  max_daily_slippage_adjustment_bps: 5
+  max_daily_quote_age_adjustment_ms: 50
+
+tuning:
+  run_every_hours: 24
+  require_operator_approval_for_live_policy_changes: false
+  export_report: true
+
+execution:
+  require_simulation_success: true
+  require_policy_pass: true
+  require_route_score_pass: true
+  submit_only_if_live_mode_enabled: false

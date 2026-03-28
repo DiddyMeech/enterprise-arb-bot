@@ -1,0 +1,64 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "24H Net Profit (USD)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [ { "expr": "arb_daily_profit_usd", "refId": "A" } ],
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "title": "Strategy Win Rate",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "targets": [ { "expr": "arb_win_rate", "refId": "A" } ],
+      "options": {
+        "min": 0, "max": 1,
+        "colorMode": "thresholds",
+        "thresholds": { "steps": [ { "color": "red", "value": 0 }, { "color": "yellow", "value": 0.7 }, { "color": "green", "value": 0.85 } ] }
+      }
+    },
+    {
+      "title": "Average Quote Drift (bps)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 3,
+      "targets": [ { "expr": "arb_avg_quote_drift", "refId": "A" } ]
+    },
+    {
+      "title": "Active Blacklisted Routes",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "id": 4,
+      "targets": [ { "expr": "arb_blacklisted_routes", "refId": "A" } ],
+      "options": { "colorMode": "background", "thresholds": { "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } }
+    },
+    {
+      "title": "Circuit Breakers Tripped",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 },
+      "id": 5,
+      "targets": [ { "expr": "arb_circuit_breakers_active", "refId": "A" } ],
+      "options": { "colorMode": "background", "thresholds": { "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["arbitrage", "mev", "telemetry"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Institutional MEV Arbitrage Metrics",
+  "uid": "enterprise-arb-dash-01",
+  "version": 1
+}

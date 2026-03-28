@@ -1,0 +1,10 @@
+{
+  "name": "@arb/policy-engine",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@arb/config": "file:../config",
+    "@arb/telemetry": "file:../telemetry"
+  }
+}

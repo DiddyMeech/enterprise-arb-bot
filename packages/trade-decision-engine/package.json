@@ -1,0 +1,15 @@
+{
+  "name": "@arb/trade-decision-engine",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@arb/config": "file:../config",
+    "@arb/telemetry": "file:../telemetry",
+    "@arb/policy-engine": "file:../policy-engine",
+    "@arb/risk-engine": "file:../risk-engine",
+    "@arb/route-scoring-engine": "file:../route-scoring-engine",
+    "@arb/sizing-engine": "file:../sizing-engine",
+    "@arb/learning-engine": "file:../learning-engine"
+  }
+}
