@@ -15,11 +15,10 @@ class SpatialScanner {
     }
 
     start() {
-        logger.info("[SPATIAL-SCANNER] Aggressive spatial polling sequence instantiated.");
-        // Evaluate theoretical cross-chain divergence continuously
-        setInterval(() => {
-            this.evaluateSpatialGaps();
-        }, 15000); // 15s execution block checks matching standard propagation graphs
+        logger.info("[SPATIAL-SCANNER] Spatial polling sequence deactivated to halt mock alerts until Phase 13 LayerZero implementation.");
+        // setInterval(() => {
+        //     this.evaluateSpatialGaps();
+        // }, 15000); // 15s execution block checks matching standard propagation graphs
     }
 
     evaluateSpatialGaps() {

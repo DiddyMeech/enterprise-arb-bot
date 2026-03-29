@@ -8,10 +8,11 @@ import {IERC20} from "@aave/core-v3/contracts/dependencies/openzeppelin/contract
 contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
     address payable public immutable owner;
     address public immutable botExecutor;
+    bool public isKilled;
 
     // We pass the PM2 Bot's runtime wallet as _botExecutor so it doesn't get locked out from trading!
     constructor(address _addressProvider, address _botExecutor) FlashLoanSimpleReceiverBase(IPoolAddressesProvider(_addressProvider)) {
-        owner = payable(0x9A2A3FF591F97EC358b8eE37Ca9a437D5DC34080); // Restored correct ownership routing
+        owner = payable(_botExecutor); // Updated to match your gas-paying wallet
         botExecutor = _botExecutor; 
     }
 
@@ -21,6 +22,7 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
     }
 
     modifier onlyExecutor() {
+        require(!isKilled, "KILLED: Emergency circuit breaker active");
         require(msg.sender == owner || msg.sender == botExecutor, "UNAUTHORIZED: Executor Only");
         _;
     }
@@ -77,6 +79,17 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
         uint256 bal = IERC20(token).balanceOf(address(this));
         require(bal > 0, "ZERO_BALANCE");
         IERC20(token).transfer(owner, bal);
+    }
+
+    function sweepETH() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "ZERO_ETH_BALANCE");
+        (bool success, ) = owner.call{value: bal}("");
+        require(success, "ETH_TRANSFER_FAILED");
+    }
+
+    function killSwitch() external onlyOwner {
+        isKilled = !isKilled; // Toggles the circuit breaker
     }
 
     receive() external payable {}

@@ -71,16 +71,33 @@ tokens:
     - WETH
     - USDC
     - USDT
+    - DAI
     - WBTC
+    - cbBTC
     - WBNB
+    - ARB
+    - LINK
+    - UNI
+    - WSTETH
 
 pairs:
   approved:
     - WETH/USDC
     - WETH/USDT
+    - WETH/DAI
     - WBTC/WETH
+    - cbBTC/WETH
+    - cbBTC/USDC
     - WBNB/USDT
     - WBNB/USDC
+    - WBNB/DAI
+    - ARB/WETH
+    - ARB/USDC
+    - LINK/WETH
+    - UNI/WETH
+    - WSTETH/WETH
+    - DAI/USDC
+    - DAI/USDT
 
 risk:
   min_profit_floor_usd: 20
