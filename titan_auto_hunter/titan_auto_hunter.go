@@ -3942,19 +3942,9 @@ func runSwarmDorker(domain, proxy string, ghKeys []string) {
 	fmt.Printf("%s  [>] Generated %d Cartesian Operator permutations for deep sweep...%s\n", colorGreen, len(cartesianDorks), colorReset)
 
 	// Phase 17/79: High-Performance Key Rotation Initialization (GitHub & GitLab)
-	ghKeyFile := "keys.txt"
-	ghb, err := ioutil.ReadFile(ghKeyFile)
-	var ghKeysLocal []string // Renamed to avoid conflict with function parameter
-	if err == nil {
-		lines := strings.Split(string(ghb), "\n")
-		for _, l := range lines {
-			l = strings.TrimSpace(l)
-			if l != "" {
-				ghKeysLocal = append(ghKeysLocal, l)
-			}
-		}
-	} else {
-		fmt.Printf("%s  [!] Warning: 'keys.txt' (GitHub PATs) not found. Global sweeps will heavily rate-limit.%s\n", colorYellow, colorReset)
+	ghKeysLocal := ghKeys // Inherit the master keys directly from secrets.json payload
+	if len(ghKeysLocal) == 0 {
+		fmt.Printf("%s  [!] Warning: No GitHub PATs provided from master vault. Global sweeps will heavily rate-limit.%s\n", colorYellow, colorReset)
 	}
 
 	glKeyFile := "gitlab_keys.txt"
