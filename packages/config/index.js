@@ -21,7 +21,8 @@ module.exports = {
         process.env.ARB_RPC_CONF
       ].filter(Boolean),
       mevRelay: process.env.ARB_MEV_RELAY || "",
-      contractAddress: process.env.ARB_CONTRACT_ADDRESS || ""
+      contractAddress: process.env.ARB_CONTRACT_ADDRESS || "",
+      pollingInterval: 1000
     },
     BASE: {
       name: "base",
@@ -32,7 +33,8 @@ module.exports = {
         process.env.BASE_RPC_CONF
       ].filter(Boolean),
       mevRelay: process.env.BASE_MEV_RELAY || "",
-      contractAddress: process.env.BASE_CONTRACT_ADDRESS || ""
+      contractAddress: process.env.BASE_CONTRACT_ADDRESS || "",
+      pollingInterval: 1000
     }
   }
 };
