@@ -61,6 +61,7 @@ class TradeDecisionEngine {
 
             if (!simulation.passed) {
                 logger.warn(`[DECISION-ENGINE] 5. full_simulation -> REVERTED_OR_IMPOSSIBLE`);
+                logger.error(`[DECISION-ENGINE] SIM_FAIL_REASON: ${simulation.revertReason || 'UNKNOWN_REVERT'}`);
                 return;
             }
             logger.debug(`[DECISION-ENGINE] 5. full_simulation -> PASSED`);

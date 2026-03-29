@@ -26,7 +26,7 @@ function findFilesInDir(startPath, filter) {
 
 async function checkRpc(url, expectedChainId) {
     try {
-        const provider = new ethers.providers.StaticJsonRpcProvider(url, expectedChainId);
+        const provider = new ethers.providers.JsonRpcProvider(url);
         const network = await provider.getNetwork();
         return network.chainId === expectedChainId;
     } catch {
@@ -47,17 +47,41 @@ async function main() {
         try {
             const content = fs.readFileSync(file, 'utf-8');
             const matches = [...content.matchAll(/(https:\/\/[a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=]+)/g)].map(m => m[1]);
+            
             matches.forEach(url => {
-                if(
-                    url.includes('alchemy.com') || 
-                    url.includes('infura.io') || 
-                    url.includes('quiknode.pro') ||
-                    url.includes('chainstack.com') ||
-                    url.includes('blastapi.io') ||
-                    url.includes('ankr.com') ||
-                    url.includes('drpc.org')
-                ) {
+                // Ignore raw github html blobs to prevent pipeline poisoning
+                if (url.includes('github.com')) return;
+                
+                // Keep the original URL if it resembles an actual API node
+                if (!url.includes('github') && (url.includes('infura') || url.includes('alchemy') || url.includes('blast') || url.includes('quik') || url.includes('ankr') || url.includes('rpc'))) {
                     allUrls.add(url);
+                }
+                
+                // Aggressive Alchemy Extraction (Derive Arb & Base seamlessly)
+                if (url.includes('alchemy.com') || url.includes('alchemyapi.io')) {
+                    const keyMatch = url.match(/\/v2\/([a-zA-Z0-9_-]{32})/);
+                    if (keyMatch && keyMatch[1]) {
+                        allUrls.add(`https://arb-mainnet.g.alchemy.com/v2/${keyMatch[1]}`);
+                        allUrls.add(`https://base-mainnet.g.alchemy.com/v2/${keyMatch[1]}`);
+                    }
+                }
+                
+                // Aggressive Infura Extraction
+                if (url.includes('infura.io')) {
+                    const keyMatch = url.match(/\/v3\/([a-zA-Z0-9_-]{32})/);
+                    if (keyMatch && keyMatch[1]) {
+                        allUrls.add(`https://arbitrum-mainnet.infura.io/v3/${keyMatch[1]}`);
+                        allUrls.add(`https://base-mainnet.infura.io/v3/${keyMatch[1]}`);
+                    }
+                }
+                
+                // Aggressive BlastAPI Extraction
+                if (url.includes('blastapi.io')) {
+                    const keyMatch = url.match(/blastapi\.io\/([a-zA-Z0-9_-]{36})/);
+                    if (keyMatch && keyMatch[1]) {
+                        allUrls.add(`https://arbitrum-one.blastapi.io/${keyMatch[1]}`);
+                        allUrls.add(`https://base-mainnet.blastapi.io/${keyMatch[1]}`);
+                    }
                 }
             });
         } catch(e) {}
