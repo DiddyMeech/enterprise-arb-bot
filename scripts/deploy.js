@@ -10,9 +10,9 @@ async function main() {
     if (network === 'arbitrum') {
         rpcUrl = process.env.ARB_RPC_SCAN || process.env.ARB_RPC_EXEC || "https://arb1.arbitrum.io/rpc";
         poolAddress = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb'; // Aave V3 Arbi
-    } else if (network === 'bsc') {
-        rpcUrl = process.env.BSC_RPC_SCAN || process.env.BSC_RPC_EXEC || "https://bsc-dataseed1.binance.org";
-        poolAddress = '0x6807dc923806fE8Fd134338EABCA509979a7e0cB'; // Aave V3 BSC    
+    } else if (network === 'op') {
+        rpcUrl = process.env.OP_RPC_SCAN || process.env.OP_RPC_EXEC || "https://optimism-mainnet.infura.io/v3/55507f44b8f845dca9864ee984d27616";
+        poolAddress = '0x794a61358D6845594F94dc1DB02A252b5b4814aD'; // Aave V3 OP    
     } else {
         // Fallback explicitly to the User's Premium Alchemy Base endpoint to bypass QuickNode gas/nonce stalls
         rpcUrl = "https://base-mainnet.g.alchemy.com/v2/pSLmhjyc-4LdT-bUrSr3m0Ks5lBCF_sr"; 

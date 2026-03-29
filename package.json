@@ -18,7 +18,7 @@
     "start:overseer": "node apps/overseer/index.js",
     "deploy:base": "node scripts/deploy.js base",
     "deploy:arb": "node scripts/deploy.js arbitrum",
-    "deploy:bsc": "node scripts/deploy.js bsc"
+    "deploy:op": "node scripts/deploy.js op"
   },
   "dependencies": {
     "cors": "^2.8.6",

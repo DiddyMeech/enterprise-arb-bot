@@ -12,12 +12,12 @@ class QuoteEngine {
             UniswapV3: {
                 Arb: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
                 Base: "0x2626664c2603336E57B271c5C0b26F421741e481",
-                BSC: "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4"
+                OP: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
             },
             SushiSwap: { // Generic V2 clones
                 Arb: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
                 Base: "0x327Df1E6de05B9A098E56B0868f7b52044458dE7",
-                BSC: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"
+                OP: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"
             }
         };
 
@@ -49,9 +49,9 @@ class QuoteEngine {
             }
         }
 
-        // Determine chain context (fallback to BSC if not explicitly bound)
+        // Determine chain context (fallback to OP if not explicitly bound)
         const network = await this.providers.getNetwork();
-        let chainName = "BSC";
+        let chainName = "OP";
         if (network.chainId === 42161) chainName = "Arb";
         else if (network.chainId === 8453) chainName = "Base";
 

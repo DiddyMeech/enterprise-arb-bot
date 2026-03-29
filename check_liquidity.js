@@ -15,7 +15,7 @@ async function check() {
     const chains = [
         { name: "Arbitrum", url: process.env.ARB_RPC_SCAN, currency: "ETH" },
         { name: "Base", url: process.env.BASE_RPC_SCAN, currency: "ETH" },
-        { name: "BSC", url: process.env.BSC_RPC_SCAN, currency: "BNB" }
+        { name: "Optimism", url: process.env.OP_RPC_SCAN || process.env.OP_RPC_EXEC, currency: "ETH" }
     ];
 
     console.log("\n⛽ NATIVE WALLET GAS BALANCES:");
@@ -34,19 +34,19 @@ async function check() {
     const AAVE_POOLS = {
         Arbitrum: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
         Base: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
-        BSC: "0x6807dc923806fE8Fd134338EABCA509979a7e0cB"
+        Optimism: "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
     };
     
     const STABLECOIN = {
         Arbitrum: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // USDC
         Base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
-        BSC: "0x55d398326f99059fF775485246999027B3197955" // USDT
+        Optimism: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85" // USDC
     };
     
     const WRAPPED_NATIVE = {
         Arbitrum: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", // WETH
         Base: "0x4200000000000000000000000000000000000006", // WETH
-        BSC: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" // WBNB
+        Optimism: "0x4200000000000000000000000000000000000006" // WETH
     };
 
     console.log("\n⚡ AAVE V3 FLASH LOAN BORROW POWER (Available Live Liquidity):");

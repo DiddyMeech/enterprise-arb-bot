@@ -64,14 +64,15 @@ const config = {
                 process.env.BASE_RPC_CONF
             ].filter(Boolean)
         },
-        BSC: {
-            id: 56,
-            name: "BSC",
-            pollingInterval: 250, // Infura WSS blocks pendingTransactions; downgraded automatically to Hyper-Polling
+        OP: {
+            id: 10,
+            name: "Optimism",
+            pollingInterval: 100, 
+            wss: process.env.OP_WSS_SCAN, 
             rpcs: [
-                process.env.BSC_RPC_SCAN,
-                process.env.BSC_RPC_EXEC,
-                process.env.BSC_RPC_CONF
+                process.env.OP_RPC_SCAN,
+                process.env.OP_RPC_EXEC,
+                process.env.OP_RPC_CONF
             ].filter(Boolean)
         }
     }
