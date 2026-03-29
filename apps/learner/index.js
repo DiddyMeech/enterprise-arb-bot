@@ -4,11 +4,37 @@ const config = require('@arb/config');
 
 class LearnerApp {
     constructor() {
-        this.pg = new Client({ connectionString: config.DATABASE_URL });
+        const dbUrl = process.env.DATABASE_URL || config.DATABASE_URL;
+        this.dbEnabled = !!dbUrl;
+
+        if (this.dbEnabled) {
+            // Parse the URL so pg never receives undefined fields (SASL requires a string password)
+            try {
+                const parsed = new URL(dbUrl);
+                this.pg = new Client({
+                    host:     parsed.hostname || 'localhost',
+                    port:     Number(parsed.port) || 5432,
+                    database: (parsed.pathname || '/postgres').slice(1),
+                    user:     parsed.username || 'postgres',
+                    password: parsed.password || '',
+                    ssl:      parsed.searchParams.get('ssl') === 'true' ? { rejectUnauthorized: false } : false,
+                });
+            } catch {
+                logger.warn('[LEARNER] DATABASE_URL is malformed — DB disabled.');
+                this.dbEnabled = false;
+            }
+        } else {
+            logger.warn('[LEARNER] DATABASE_URL not set — running without DB (analytics disabled).');
+        }
+
         logger.info("[LEARNER] Initializing Machine Learning & Analytics Control Engine");
     }
 
     async start() {
+        if (!this.dbEnabled) {
+            logger.warn('[LEARNER] DB not configured — idling. Set DATABASE_URL to enable analytics.');
+            return;
+        }
         await this.pg.connect();
         
         // Periodic Evaluation Loop
