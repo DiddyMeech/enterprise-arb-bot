@@ -1,203 +1,412 @@
+/**
+ * arb-scanner/index.js — Phase 15 wiring
+ *
+ * Normalizes on-chain routing events into proper Opportunity objects and feeds
+ * them directly into ArbOrchestrator.submitOpportunity() in shadow mode.
+ *
+ * Active filters (Phase 15 / shadow-mode hardening):
+ *   - Arbitrum + Base only
+ *   - USDC/WETH pair only
+ *   - Sushi router only (proven route family)
+ *   - Max 1 opportunity per route per 3s (dedupe TTL)
+ *   - Freshness gate: max 1200ms from quote to submit
+ */
+
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+
 const { ethers } = require('ethers');
+const { randomUUID } = require('crypto');
 const config = require('@arb/config');
-// Removed cyclical telemetry
 
-// The Scanner is purely stateless and strictly decoupled.
-// It maps WS bindings where supported (BSC) and uses rapid polling for Arbitrum/Base.
+// ── Constants ───────────────────────────────────────────────────────────────
+const USDC_ARB  = '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8'.toLowerCase();
+const WETH_ARB  = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'.toLowerCase();
+const USDC_BASE = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA'.toLowerCase(); // USDbC
+const WETH_BASE = '0x4200000000000000000000000000000000000006'.toLowerCase();
+
+const SUSHI_ROUTER_ARB  = '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506'.toLowerCase();
+const SUSHI_ROUTER_BASE = '0x327Df1E6de05B9A098E56B0868f7b52044458dE7'.toLowerCase();
+
+const ALLOWED_PAIRS = new Set([
+  `${USDC_ARB}:${WETH_ARB}`,
+  `${WETH_ARB}:${USDC_ARB}`,
+  `${USDC_BASE}:${WETH_BASE}`,
+  `${WETH_BASE}:${USDC_BASE}`,
+]);
+const ALLOWED_ROUTERS = new Set([SUSHI_ROUTER_ARB, SUSHI_ROUTER_BASE]);
+
+// USDC decimals = 6, WETH = 18; map normalized symbol
+function tokenSymbol(addr) {
+  const a = addr.toLowerCase();
+  if (a === USDC_ARB || a === USDC_BASE) return 'USDC';
+  if (a === WETH_ARB || a === WETH_BASE) return 'WETH';
+  return null;
+}
+
+// Rough USD conversion for the profit hint (not used for execution, just pre-filter)
+const ETH_PRICE_USD_HINT = 2200;
+function rawToUsdHint(rawBn, decimals) {
+  try {
+    const f = parseFloat(ethers.utils.formatUnits(rawBn, decimals));
+    return decimals === 6 ? f : f * ETH_PRICE_USD_HINT;
+  } catch { return 0; }
+}
+
+// ── Dedupe cache ─────────────────────────────────────────────────────────────
+const DEDUPE_TTL_MS = 3000;
+const dedupeCache = new Map(); // key → expiryMs
+
+function isDuplicate(key) {
+  const exp = dedupeCache.get(key);
+  if (exp && exp > Date.now()) return true;
+  dedupeCache.set(key, Date.now() + DEDUPE_TTL_MS);
+  return false;
+}
+
+// Prune stale dedupe entries every 30s
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of dedupeCache) {
+    if (exp <= now) dedupeCache.delete(k);
+  }
+}, 30_000);
+
+// ── Lazy-load orchestrator (built once, shared across scanner hits) ──────────
+let orchestratorPromise = null;
+
+async function getOrchestrator() {
+  if (orchestratorPromise) return orchestratorPromise;
+
+  orchestratorPromise = (async () => {
+    const {
+      ArbOrchestrator,
+      ORCHESTRATOR_CONFIG,
+      EngineLogger,
+    } = require('@arb/trade-decision-engine');
+
+    const { ethers: eth } = require('ethers');
+
+    // Per-chain provider for real quoteExactRoute + simulateExactExecution
+    function getProvider(chain) {
+      const cfg = Object.values(config.CHAINS).find(c => c.name === chain);
+      if (!cfg || !cfg.rpcs?.length) throw new Error(`No RPC for chain: ${chain}`);
+      return new eth.providers.StaticJsonRpcProvider(cfg.rpcs[0]);
+    }
+
+    function getExecutor(chain) {
+      const cfg = Object.values(config.CHAINS).find(c => c.name === chain);
+      return cfg?.contractAddress || config.ARB_CONTRACT_ADDRESS || '';
+    }
+
+    // ── Real quote via Sushi getAmountsOut ─────────────────────────────────
+    const SUSHI_IFACE = new eth.utils.Interface([
+      'function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)',
+    ]);
+
+    async function quoteExactRoute(opp, amountInUsd) {
+      try {
+        const provider = getProvider(opp.chain);
+        const router   = opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
+        const usdcAddr = opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
+        const wethAddr = opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
+
+        const isUsdcIn = opp.tokenIn === 'USDC';
+        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
+        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
+
+        const inDecimals  = isUsdcIn ? 6 : 18;
+        const amountInRaw = eth.utils.parseUnits(String(Math.round(amountInUsd)), inDecimals);
+
+        const sushi = new eth.Contract(router, SUSHI_IFACE, provider);
+        const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
+
+        const outDecimals   = isUsdcIn ? 18 : 6;
+        const grossProfitUsd = rawToUsdHint(amounts[1], outDecimals) - amountInUsd;
+
+        if (grossProfitUsd <= 0) return { ok: false, reason: 'NO_PROFIT_AFTER_QUOTE' };
+
+        const gasUsd = opp.chain === 'arbitrum' ? 1.8 : 1.2;
+        const dexFeesUsd = amountInUsd * 0.003;
+
+        return {
+          ok: true,
+          grossProfitUsd: Math.max(0, grossProfitUsd),
+          gasUsd,
+          dexFeesUsd,
+          flashLoanFeeUsd: 0,
+          amountOutRaw: amounts[1].toString(),
+          route: {
+            chain: opp.chain,
+            legs: [
+              { dex: 'sushi', tokenIn: opp.tokenIn, tokenOut: opp.tokenOut, pool: router },
+              { dex: 'sushi', tokenIn: opp.tokenOut, tokenOut: opp.tokenIn, pool: router },
+            ],
+            amountInUsd,
+            expectedAmountOutRaw: amounts[1].toString(),
+            expectedGrossProfitUsd: Math.max(0, grossProfitUsd),
+          },
+        };
+      } catch (e) {
+        return { ok: false, reason: `QUOTE_ERROR: ${e.message}` };
+      }
+    }
+
+    // ── Real simulate via eth_call ─────────────────────────────────────────
+    async function simulateExactExecution(input) {
+      try {
+        const {
+          buildExecutionPlan,
+          normalizeRoute,
+          encodeDexLeg,
+          decodeCommonRevert,
+        } = require('@arb/trade-decision-engine');
+
+        const provider = getProvider(input.opp.chain);
+        const executorAddress = getExecutor(input.opp.chain);
+        if (!executorAddress) return { ok: false, mode: input.mode, decodedReason: 'NO_EXECUTOR' };
+
+        const usdcAddr = input.opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
+        const wethAddr = input.opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
+        const router   = input.opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
+
+        const isUsdcIn = input.opp.tokenIn === 'USDC';
+        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
+        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
+        const inDecimals   = isUsdcIn ? 6 : 18;
+
+        const amountInRaw = eth.utils.parseUnits(
+          String(Math.round(input.amountInUsd)), inDecimals
+        ).toString();
+
+        const deadline = Math.floor(Date.now() / 1000) + 60;
+
+        // Quote leg1 to get real leg2 amountIn
+        let leg2AmountInRaw = amountInRaw;
+        try {
+          const sushi = new eth.Contract(router, SUSHI_IFACE, provider);
+          const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
+          leg2AmountInRaw = amounts[1].toString();
+        } catch { /* use fallback */ }
+
+        const normalized = normalizeRoute({
+          deadline,
+          legs: [
+            { dex: 'sushi', router, tokenIn: tokenInAddr, tokenOut: tokenOutAddr,
+              recipient: executorAddress, amountInRaw, minOutRaw: '1' },
+            { dex: 'sushi', router, tokenIn: tokenOutAddr, tokenOut: tokenInAddr,
+              recipient: executorAddress, amountInRaw: leg2AmountInRaw, minOutRaw: '1' },
+          ],
+        });
+
+        const encodedLegs = normalized.map(l => encodeDexLeg(l));
+        const plan = buildExecutionPlan({
+          executorAddress,
+          mode: input.mode,
+          route: {
+            chain: input.opp.chain,
+            tokenIn: tokenInAddr,
+            tokenOut: tokenInAddr, // circular
+            amountInRaw,
+            minProfitTokenRaw: '0',
+            minOutRaw: '1',
+            deadline,
+            legs: encodedLegs,
+          },
+        });
+
+        await provider.call({ to: plan.target, data: plan.calldata });
+        return { ok: true, mode: input.mode };
+      } catch (err) {
+        const { decodeCommonRevert } = require('@arb/trade-decision-engine');
+        return { ok: false, mode: input.mode, decodedReason: decodeCommonRevert(err), rawError: err };
+      }
+    }
+
+    const logger = new EngineLogger({ service: 'arb-scanner', minLevel: 'info', json: true });
+
+    const orchestrator = new ArbOrchestrator(
+      ORCHESTRATOR_CONFIG, // stays shadow mode
+      {
+        quoteExactRoute,
+        simulateExactExecution,
+        sendExecution: async () => ({ ok: false, error: 'SHADOW_MODE_NO_SEND' }),
+        waitForReceipt: async (txHash) => ({ ok: false, txHash, error: 'SHADOW_MODE' }),
+        persistReplay: async (record) => {
+          // light console log for replay in shadow mode
+          if (record.phase === 'simulate' && record.evaluation?.ok) {
+            logger.info('LEARN_UPDATE', {
+              eventType: 'SHADOW_WOULD_EXECUTE',
+              chain: record.opportunity.chain,
+              opportunityId: record.opportunity.id,
+              netProfitUsd: record.evaluation?.netProfitUsd,
+              score: record.evaluation?.score,
+            });
+          }
+        },
+        log: (msg, payload) => logger.info('LEARN_UPDATE', { msg, payload }),
+      },
+      logger,
+    );
+
+    orchestrator.startBackgroundTasks();
+    logger.info('SYSTEM_STARTUP', { message: 'Scanner→Orchestrator bridge active (shadow mode)' });
+    return orchestrator;
+  })();
+
+  return orchestratorPromise;
+}
+
+// ── Main scanner class ───────────────────────────────────────────────────────
 class ScannerApp {
-    constructor() {
-        this.chains = config.CHAINS;
-        this.pollIntervals = new Map();
-        console.log("[SCANNER] Initializing multi-chain event ingestion protocol");
+  constructor() {
+    this.chains = config.CHAINS;
+    console.log('[SCANNER] Initializing multi-chain event ingestion protocol');
+  }
+
+  start() {
+    for (const chain of Object.values(this.chains)) {
+      if (chain.name === 'optimism') continue;
+      if (chain.wss) {
+        this.startWebsocket(chain);
+      } else if (chain.pollingInterval) {
+        this.startPolling(chain);
+      }
     }
+  }
 
-    start() {
-        for (const [key, chain] of Object.entries(this.chains)) {
-            // Operator request: temporarily drop Optimism until Infura nodes are fully permissioned
-            if (chain.name === 'Optimism') continue;
+  startWebsocket(chain) {
+    console.log(`[SCANNER] [WSS] Binding WebSocket listener to ${chain.name}`);
+    const provider = new ethers.providers.WebSocketProvider(chain.wss);
+    provider.on('pending', async (txHash) => {
+      try {
+        const tx = await provider.getTransaction(txHash);
+        if (!tx?.to) return;
+        this.processTx(chain, tx, await provider.getBlockNumber());
+      } catch { /* silent */ }
+    });
+  }
 
-            if (chain.wss) {
-                this.startWebsocket(chain);
-            } else if (chain.pollingInterval) {
-                this.startPolling(chain);
-            }
+  startPolling(chain) {
+    console.log(`[SCANNER] [POLL] Launching ${chain.pollingInterval}ms block poller on ${chain.name}`);
+
+    // BUG FIX: use chainId not chain.id for StaticJsonRpcProvider
+    const providers = chain.rpcs.map(url =>
+      new ethers.providers.StaticJsonRpcProvider(url, { chainId: chain.chainId, name: chain.name })
+    );
+    let pIndex = 0;
+    let lastBlock = null;
+
+    setInterval(async () => {
+      try {
+        const provider = providers[pIndex];
+        pIndex = (pIndex + 1) % providers.length;
+
+        const latest = await provider.getBlockNumber();
+        if (lastBlock === null) { lastBlock = latest - 1; return; }
+        if (latest <= lastBlock) return;
+
+        const start = Math.max(lastBlock + 1, latest - 5);
+        for (let b = start; b <= latest; b++) {
+          const block = await provider.getBlockWithTransactions(b);
+          if (!block?.transactions) continue;
+
+          console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${b} | ${block.transactions.length} txs scanned.`);
+
+          for (const tx of block.transactions) {
+            if (tx.to) this.processTx(chain, tx, b);
+          }
         }
+        lastBlock = latest;
+      } catch (err) {
+        console.error(`[SCANNER] Poll error on ${chain.name}: ${err.message}`);
+      }
+    }, chain.pollingInterval);
+  }
+
+  processTx(chain, tx, blockNumber) {
+    if (!tx.to) return;
+    const router = tx.to.toLowerCase();
+    if (!ALLOWED_ROUTERS.has(router)) return;
+
+    // Decode Sushi swapExactTokensForTokens
+    try {
+      const iface = new ethers.utils.Interface([
+        'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)',
+      ]);
+      const decoded = iface.parseTransaction({ data: tx.data });
+      if (!decoded) return;
+
+      const path = decoded.args.path;
+      if (!path || path.length < 2) return;
+
+      const tokenIn  = path[0].toLowerCase();
+      const tokenOut = path[path.length - 1].toLowerCase();
+      const pairKey  = `${tokenIn}:${tokenOut}`;
+
+      if (!ALLOWED_PAIRS.has(pairKey)) return;
+
+      const symIn  = tokenSymbol(tokenIn);
+      const symOut = tokenSymbol(tokenOut);
+      if (!symIn || !symOut) return;
+
+      const amountIn = decoded.args.amountIn;
+      const inDecimals = symIn === 'USDC' ? 6 : 18;
+      const amountInUsdHint = rawToUsdHint(amountIn, inDecimals);
+
+      // Skip dust
+      if (amountInUsdHint < 500) return;
+
+      const dedupeKey = `${chain.name}:${pairKey}:${blockNumber}`;
+      if (isDuplicate(dedupeKey)) return;
+
+      this.submitToOrchestrator({
+        chain: chain.name,
+        tokenIn: symIn,
+        tokenOut: symOut,
+        amountInUsdHint,
+        blockNumber,
+        quoteTimestampMs: Date.now(),
+      });
+    } catch { /* non-matching function signature */ }
+  }
+
+  async submitToOrchestrator(hit) {
+    // Freshness gate — drop if scanner→orchestrator handoff is stale
+    const age = Date.now() - hit.quoteTimestampMs;
+    if (age > 1200) {
+      console.log(`[SCANNER] [SKIP] Stale hit dropped (${age}ms) on ${hit.chain}`);
+      return;
     }
 
-    startWebsocket(chain) {
-        console.log(`[SCANNER] [WSS] Binding pure WebSocket listener to ${chain.name}`);
-        const provider = new ethers.providers.WebSocketProvider(chain.wss);
-        
-        provider.on("pending", async (txHash) => {
-            try {
-                // Dynamically extract the cryptographic EIP-1559 envelope immediately
-                const tx = await provider.getTransaction(txHash);
-                if (!tx || !tx.to) return;
-                
-                const target = tx.to.toLowerCase();
-                const v3RouterArb = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45".toLowerCase();
-                const v3RouterBase = "0x2626664c2603336E57B271c5C0b26F421741e481".toLowerCase();
+    const opp = {
+      id: randomUUID(),
+      chain: hit.chain,
+      tokenIn: hit.tokenIn,
+      tokenOut: hit.tokenOut,
+      dexBuy: 'sushi',
+      dexSell: 'sushi',
+      amountInUsdHint: hit.amountInUsdHint,
+      // Conservative hints — real quote fetched inside orchestrator
+      quotedGrossProfitUsd: hit.amountInUsdHint * 0.003,
+      estimatedGasUsd: hit.chain === 'arbitrum' ? 1.8 : 1.2,
+      estimatedPriceImpactBps: 10,
+      minObservedPoolLiquidityUsd: 500_000,
+      minObserved24hVolumeUsd: 500_000,
+      routeHops: 2,
+      blockNumberSeen: hit.blockNumber,
+      currentBlockNumber: hit.blockNumber,
+      quoteTimestampMs: hit.quoteTimestampMs,
+    };
 
-                // Intercept payload if natively directed at Uniswap V3 core
-                if (target === v3RouterArb || target === v3RouterBase) {
-                    const decoder = require('@arb/dex-adapters/uniswap-v3');
-                    const decoded = decoder.decodeSwap(tx);
-                    if (decoded) {
-                        const { randomUUID } = require('crypto');
-                        this.emitOpportunity(chain, randomUUID(), decoded);
-                    }
-                }
-            } catch (err) { 
-                // Silently drop latency or rate-limiting faults 
-            }
-        });
+    console.log(`[SCANNER] [→ORCH] ${opp.chain} | ${opp.tokenIn}→${opp.tokenOut} | ~$${opp.amountInUsdHint.toFixed(0)} | id: ${opp.id.slice(0,8)}`);
+
+    try {
+      const orchestrator = await getOrchestrator();
+      orchestrator.submitOpportunity(opp);
+    } catch (err) {
+      console.error(`[SCANNER] Orchestrator submit error: ${err.message}`);
     }
-
-    startPolling(chain) {
-        console.log(`[SCANNER] [POLL] Launching aggressive ${chain.pollingInterval}ms block poller on ${chain.name}`);
-        
-        // True Round-Robin API Load Balancer distributes requests evenly rather than pinning priority 1
-        const providers = chain.rpcs.map(url => new ethers.providers.StaticJsonRpcProvider(url, chain.id));
-        let pIndex = 0;
-        let lastProcessedBlock = null;
-
-        const intervalId = setInterval(async () => {
-            try {
-                if (providers.length === 0) return;
-                
-                // Fetch the active node in the rotation queue and cycle the pointer forward
-                const provider = providers[pIndex];
-                pIndex = (pIndex + 1) % providers.length;
-
-                const latestBlockNumber = await provider.getBlockNumber();
-                
-                if (lastProcessedBlock === null) {
-                    lastProcessedBlock = latestBlockNumber - 1;
-                }
-
-                if (latestBlockNumber > lastProcessedBlock) {
-                    // Prevent massive rate limit spikes if node falls heavily out of sync (cap at 10 block burst)
-                    const startBlock = Math.max(lastProcessedBlock + 1, latestBlockNumber - 10);
-                    
-                    for (let currentBlock = startBlock; currentBlock <= latestBlockNumber; currentBlock++) {
-                        const block = await provider.getBlockWithTransactions(currentBlock);
-                        
-                        if (block && block.transactions) {
-                            // Visible heartbeat logging so the operator can actively monitor block ingestion
-                            console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${currentBlock} | ${block.transactions.length} txs scanned.`);
-                            
-                            // Aggressive mempool coverage: Include standard Uniswap V3 and Universal Routers instead of just PancakeSwap
-                            const targetRouters = [
-                                "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase(), // PancakeSwap V3
-                                "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45".toLowerCase(), // Uniswap V3 Router 2
-                                "0xE592427A0AEce92De3Edee1F18E0157C05861564".toLowerCase(), // Uniswap V3 Router 1
-                                "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD".toLowerCase()  // Uniswap Universal Router
-                            ];
-
-                            for (const tx of block.transactions) {
-                                if (tx.to && targetRouters.includes(tx.to.toLowerCase())) {
-                                    const decoder = require('@arb/dex-adapters/uniswap-v3'); // Pancakeswap V3 structurally mimics UniswapV3
-                                    const decoded = decoder.decodeSwap(tx);
-                                    if (decoded) {
-                                        const { randomUUID } = require('crypto');
-                                        this.emitOpportunity(chain, randomUUID(), decoded);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    lastProcessedBlock = latestBlockNumber;
-                }
-            } catch (err) {
-                console.error(`[SCANNER] Polling failure on ${chain.name}: ${err.message}`);
-            }
-        }, chain.pollingInterval);
-        
-        this.pollIntervals.set(chain.name, intervalId);
-    }
-
-    emitOpportunity(chain, refId, decoded) {
-        const payload = {
-            id: refId,
-            chain: chain.name,
-            dexCombo: decoded ? `${decoded.dex}_SushiSwap` : "UniswapV3_SushiSwap",
-            tokenIn: decoded ? decoded.tokenIn : "0xWETH",
-            tokenOut: decoded ? decoded.tokenOut : "0xUSDC",
-            amountIn: decoded ? decoded.amountIn : ethers.utils.parseEther("1.0"),
-            timestamp: Date.now()
-        };
-        const humanReadableAmount = ethers.utils.formatEther(payload.amountIn || "0");
-        const tIn = typeof payload.tokenIn === 'string' && payload.tokenIn.length > 10 ? `${payload.tokenIn.substring(0,6)}...` : payload.tokenIn;
-        const tOut = typeof payload.tokenOut === 'string' && payload.tokenOut.length > 10 ? `${payload.tokenOut.substring(0,6)}...` : payload.tokenOut;
-        console.log(`[SCANNER] [HIT] Discovered routing opportunity on ${chain.name} [Ref: ${refId.substring(0, 8)}] | Pair: ${tIn}/${tOut} | Payload: ${humanReadableAmount} tokens | Target: ${payload.dexCombo}`);
-        
-        payload.routeSignature = 'UNIV3_SUSHI_' + payload.tokenIn;
-        const decisionEngine = require('@arb/trade-decision-engine');
-        
-        // Binds out to the native Simulator natively testing the Arbitrage swap logic
-        const simulateCall = async (o) => {
-            try {
-                const config = require('@arb/config');
-                const provider = new ethers.providers.StaticJsonRpcProvider(chain.rpcs && chain.rpcs.length > 0 ? chain.rpcs[0] : config.CHAINS[chain.name.toUpperCase()].rpcs[0]);
-                const abi = ["function requestFlashLoan(address asset, uint256 amount, bytes calldata params) external"];
-                const contract = new ethers.Contract(config.CHAINS[chain.name.toUpperCase()].contractAddress || config.ARB_CONTRACT_ADDRESS, abi, provider);
-                
-                const { UniswapV3Adapter, BaseDexAdapter } = require('@arb/dex-adapters');
-                const QuoteEngine = require('@arb/quote-engine');
-                const quoteEngine = new QuoteEngine(provider);
-                
-                const adapters = [
-                    new UniswapV3Adapter(ethers.constants.AddressZero, "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6", provider),
-                    new BaseDexAdapter("SushiSwap", "0x327Df1E6de05B9A098E56B0868f7b52044458dE7", provider)
-                ];
-                
-                const { targets, executePayloads, bestQuote } = await quoteEngine.getOptimalQuote(o.tokenIn, o.tokenOut, o.amountIn, adapters);
-                
-                // Removed faulty Aave Premium Buffer check which compared WETH fee against TokenOut quote amount
-
-                const simParams = ethers.utils.defaultAbiCoder.encode(['address[]', 'bytes[]'], [targets || [], executePayloads || []]);
-                
-                await contract.callStatic.requestFlashLoan(
-                    o.tokenIn, 
-                    o.amountIn, 
-                    simParams, 
-                    { from: '0x0000000000000000000000000000000000000000' }
-                );
-                
-                return {
-                    passed: true, status: 'SUCCESS', targets, executePayloads, expectedGrossUsd: 15.00, expectedNetUsd: 5.00, gasEstimateUsd: 2.00, relayerEstimateUsd: 0.00, slippageEstimateBps: 15, revertReason: null
-                };
-            } catch(e) {
-                return {
-                    passed: false, status: 'CATCH_REVERT', expectedGrossUsd: 0, expectedNetUsd: 0, gasEstimateUsd: 0, relayerEstimateUsd: 0, slippageEstimateBps: 0, revertReason: e.reason || e.message
-                };
-            }
-        };
-
-        const executeLive = async (o, sizeUsd, sim) => {
-            try {
-                const executor = require('@arb/executor');
-                
-                // Route through the secure generalized execution tier allowing GasEngine & SAFE_MODE constraints
-                await executor.submitValidatedTrade({
-                    payload: o,
-                    evaluation: sim
-                });
-
-                return {
-                    execId: refId, status: 'BROADCAST_INITIATED', netProfitUsd: 0, gasPaidUsd: 0, realizedSlippageBps: 0, latencyMs: 0, quoteDriftBps: 0
-                };
-            } catch (err) {
-                return {
-                    execId: refId, status: 'REVERTED', netProfitUsd: 0, gasPaidUsd: 0, realizedSlippageBps: 0, latencyMs: 0, quoteDriftBps: 0, revertReason: err.message
-                };
-            }
-        };
-
-        decisionEngine.evaluatePipeline(payload, simulateCall, executeLive).catch(err => {
-            console.error(`[SCANNER] Pipeline Interception Fault: ${err.message}`);
-        });
-    }
+  }
 }
 
 new ScannerApp().start();
