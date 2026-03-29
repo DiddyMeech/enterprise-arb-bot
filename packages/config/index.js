@@ -46,9 +46,9 @@ const config = {
             id: 42161,
             name: "Arbitrum",
             contractAddress: process.env.ARB_CONTRACT_ADDRESS,
-            pollingInterval: 250, // Accelerated to 250ms (Theoretical block speed limit without popping 429s)
+            pollingInterval: 1000, 
             // wss: process.env.ARB_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
-            rpcs: [
+            rpcs: process.env.ARB_RPC_NODES ? process.env.ARB_RPC_NODES.split(',') : [
                 process.env.ARB_RPC_SCAN,
                 process.env.ARB_RPC_EXEC,
                 process.env.ARB_RPC_CONF
@@ -58,9 +58,9 @@ const config = {
             id: 8453,
             name: "Base",
             contractAddress: process.env.BASE_CONTRACT_ADDRESS,
-            pollingInterval: 250, // Accelerated to 250ms
+            pollingInterval: 1000, 
             // wss: process.env.BASE_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
-            rpcs: [
+            rpcs: process.env.BASE_RPC_NODES ? process.env.BASE_RPC_NODES.split(',') : [
                 process.env.BASE_RPC_SCAN,
                 process.env.BASE_RPC_EXEC,
                 process.env.BASE_RPC_CONF
