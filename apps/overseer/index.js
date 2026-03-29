@@ -120,8 +120,14 @@ You must reply STRICTLY with a valid JSON object matching this schema and absolu
         try {
             let envContent = fs.readFileSync(this.envPath, 'utf8');
             
-            // Regex strictly captures and replaces the exact constraint dynamically
-            envContent = envContent.replace(/MIN_PROFIT_USD=\d+/g, `MIN_PROFIT_USD=${newLimit}`);
+            // Safely iterate over each line to replace the constraint dynamically
+            const lines = envContent.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('MIN_PROFIT_USD=')) {
+                    lines[i] = `MIN_PROFIT_USD=${newLimit}`;
+                }
+            }
+            envContent = lines.join('\n');
             
             fs.writeFileSync(this.envPath, envContent, 'utf8');
 
