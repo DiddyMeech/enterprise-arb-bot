@@ -60,27 +60,41 @@ class ScannerApp {
             stallTimeout: 2000
         }));
         const provider = new ethers.providers.FallbackProvider(fallbackConfigs, 1);
-        
+        let lastProcessedBlock = null;
+
         const intervalId = setInterval(async () => {
             try {
                 // By syncing locally via FallbackProvider, an API key failure intrinsically shifts to the standby node
-                const blockNumber = await provider.getBlockNumber();
-                const block = await provider.getBlockWithTransactions(blockNumber);
+                const latestBlockNumber = await provider.getBlockNumber();
                 
-                if (block && block.transactions) {
-                    // Visible heartbeat logging so the operator can actively monitor block ingestion
-                    console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${blockNumber} | ${block.transactions.length} txs scanned.`);
+                if (lastProcessedBlock === null) {
+                    lastProcessedBlock = latestBlockNumber - 1;
+                }
+
+                if (latestBlockNumber > lastProcessedBlock) {
+                    // Prevent massive rate limit spikes if node falls heavily out of sync (cap at 10 block burst)
+                    const startBlock = Math.max(lastProcessedBlock + 1, latestBlockNumber - 10);
                     
-                    for (const tx of block.transactions) {
-                        if (tx.to && tx.to.toLowerCase() === "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase()) {
-                            const decoder = require('@arb/dex-adapters/uniswap-v3'); // Pancakeswap V3 structurally mimics UniswapV3
-                            const decoded = decoder.decodeSwap(tx);
-                            if (decoded) {
-                                const { randomUUID } = require('crypto');
-                                this.emitOpportunity(chain, randomUUID(), decoded);
+                    for (let currentBlock = startBlock; currentBlock <= latestBlockNumber; currentBlock++) {
+                        const block = await provider.getBlockWithTransactions(currentBlock);
+                        
+                        if (block && block.transactions) {
+                            // Visible heartbeat logging so the operator can actively monitor block ingestion
+                            console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${currentBlock} | ${block.transactions.length} txs scanned.`);
+                            
+                            for (const tx of block.transactions) {
+                                if (tx.to && tx.to.toLowerCase() === "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase()) {
+                                    const decoder = require('@arb/dex-adapters/uniswap-v3'); // Pancakeswap V3 structurally mimics UniswapV3
+                                    const decoded = decoder.decodeSwap(tx);
+                                    if (decoded) {
+                                        const { randomUUID } = require('crypto');
+                                        this.emitOpportunity(chain, randomUUID(), decoded);
+                                    }
+                                }
                             }
                         }
                     }
+                    lastProcessedBlock = latestBlockNumber;
                 }
             } catch (err) {
                 console.error(`[SCANNER] Polling failure on ${chain.name}: ${err.message}`);
