@@ -1,5 +1,12 @@
-# Environments
+# Environments and OPSEC Vaults
 .env
+.env.gpg
+titan_auto_hunter/brain/secrets.json
+titan_auto_hunter/brain/network_config.json
+**/*.key
+**/*.pem
+ssh/
+
 
 # Dependencies
 node_modules/
