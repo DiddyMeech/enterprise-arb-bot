@@ -5,7 +5,9 @@ const { logger } = require('@arb/telemetry');
 // Capable of stripping V2/V3 multicall and exactInput payloads physically intercepting MEMPOOL memsets
 const UNISWAP_V3_ROUTER_ABI = [
     "function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)",
-    "function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum)) external payable returns (uint256 amountOut)"
+    "function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum)) external payable returns (uint256 amountOut)",
+    "function multicall(bytes[] calldata data) external payable returns (bytes[] memory results)",
+    "function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results)"
 ];
 
 class UniswapV3Decoder {
@@ -57,6 +59,30 @@ class UniswapV3Decoder {
                     amountIn: params.amountIn,
                     rawPath: pathBytes
                 };
+            }
+
+            // Unpack nested multicall execution arrays used universally by modern V3 front-ends
+            if (parsed.name === "multicall") {
+                const dataArray = parsed.args.data || parsed.args[1]; // Handle both multicall variations
+                if (dataArray) {
+                    for (const innerData of dataArray) {
+                        try {
+                            const innerParsed = this.interface.parseTransaction({ data: innerData });
+                            
+                            if (innerParsed.name === "exactInputSingle") {
+                                const params = innerParsed.args[0];
+                                return {
+                                    dex: "UniswapV3",
+                                    type: "exactInputSingle_Multicall",
+                                    tokenIn: params.tokenIn,
+                                    tokenOut: params.tokenOut,
+                                    amountIn: params.amountIn,
+                                    feeTier: params.fee
+                                };
+                            }
+                        } catch(e) {}
+                    }
+                }
             }
             return null;
         } catch (error) {
