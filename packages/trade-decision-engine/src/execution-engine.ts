@@ -11,7 +11,7 @@
 //
 // Replace the stubbed functions at the bottom with your real integrations.
 
-import { classifySimulationFailure, FailureReason } from "./failure-classifier";
+import { classifyFailure, FailureReason } from "./failure-classifier";
 
 export type ChainName = "arbitrum" | "base";
 export type DexName = "univ3" | "sushi" | "camelot" | "aerodrome";
@@ -405,7 +405,7 @@ export async function evaluateOpportunity(
     });
 
     if (!sim.ok) {
-      const failReason = sim.reason ?? classifySimulationFailure({
+      const failReason = sim.reason ?? classifyFailure({
         decodedReason: sim.decodedReason,
         revertData: sim.revertData,
         rawError: sim.rawError

@@ -1,15 +1,22 @@
 {
   "name": "@arb/trade-decision-engine",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
   "private": true,
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
     "@arb/config": "file:../config",
-    "@arb/telemetry": "file:../telemetry",
+    "@arb/learning-engine": "file:../learning-engine",
     "@arb/policy-engine": "file:../policy-engine",
     "@arb/risk-engine": "file:../risk-engine",
     "@arb/route-scoring-engine": "file:../route-scoring-engine",
     "@arb/sizing-engine": "file:../sizing-engine",
-    "@arb/learning-engine": "file:../learning-engine"
+    "@arb/telemetry": "file:../telemetry"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
   }
 }

@@ -55,5 +55,5 @@ orchestrator.startBackgroundTasks();
 
 logger.info("SYSTEM_STARTUP", {
   message: "Arbitrage Orchestrator initialized successfully.",
-  mode: ORCHESTRATOR_CONFIG.mode
+  mode: ORCHESTRATOR_CONFIG.mode as any
 });

@@ -19,7 +19,8 @@ export type LogEvent =
   | "EXECUTE_FAIL"
   | "EXECUTE_CONFIRMED"
   | "EXECUTE_REVERTED"
-  | "LEARN_UPDATE";
+  | "LEARN_UPDATE"
+  | "SYSTEM_STARTUP";
 
 export type LogContext = {
   chain?: string;
