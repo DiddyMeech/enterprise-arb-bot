@@ -41,3 +41,7 @@ CREATE TABLE strategy_metrics (
     banned BOOLEAN DEFAULT FALSE,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- PM2 Execution Role Authorizations
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO arbuser;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO arbuser;

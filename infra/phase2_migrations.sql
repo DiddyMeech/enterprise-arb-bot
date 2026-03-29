@@ -151,3 +151,7 @@ CREATE TABLE IF NOT EXISTS daily_performance (
     relayer_spent_usd DECIMAL(12, 4) DEFAULT 0.0,
     total_trades INTEGER DEFAULT 0
 );
+
+-- PM2 Execution Role Authorizations
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO arbuser;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO arbuser;
