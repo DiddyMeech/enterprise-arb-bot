@@ -26,6 +26,9 @@ const WETH_BASE = '0x4200000000000000000000000000000000000006'.toLowerCase();
 
 const SUSHI_ROUTER_ARB  = '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506'.toLowerCase();
 const SUSHI_ROUTER_BASE = '0x327Df1E6de05B9A098E56B0868f7b52044458dE7'.toLowerCase();
+const UNIV3_ROUTER_ARB  = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45'.toLowerCase(); // SwapRouter02
+const UNIV3_ROUTER_ARB2 = '0xE592427A0AEce92De3Edee1F18E0157C05861564'.toLowerCase(); // SwapRouter01
+const UNIV3_ROUTER_BASE = '0x2626664c2603336E57B271c5C0b26F421741e481'.toLowerCase();
 
 const ALLOWED_PAIRS = new Set([
   `${USDC_ARB}:${WETH_ARB}`,
@@ -33,7 +36,10 @@ const ALLOWED_PAIRS = new Set([
   `${USDC_BASE}:${WETH_BASE}`,
   `${WETH_BASE}:${USDC_BASE}`,
 ]);
-const ALLOWED_ROUTERS = new Set([SUSHI_ROUTER_ARB, SUSHI_ROUTER_BASE]);
+const ALLOWED_ROUTERS = new Set([
+  SUSHI_ROUTER_ARB, SUSHI_ROUTER_BASE,
+  UNIV3_ROUTER_ARB, UNIV3_ROUTER_ARB2, UNIV3_ROUTER_BASE,
+]);
 
 // USDC decimals = 6, WETH = 18; map normalized symbol
 function tokenSymbol(addr) {
@@ -327,48 +333,64 @@ class ScannerApp {
     if (!tx.to) return;
     const router = tx.to.toLowerCase();
     if (!ALLOWED_ROUTERS.has(router)) return;
+    this.tryDecodeSushiSwap(chain, tx, blockNumber);
+    this.tryDecodeUniV3Swap(chain, tx, blockNumber);
+  }
 
-    // Decode Sushi swapExactTokensForTokens
+  tryDecodeSushiSwap(chain, tx, blockNumber) {
     try {
       const iface = new ethers.utils.Interface([
         'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)',
       ]);
       const decoded = iface.parseTransaction({ data: tx.data });
       if (!decoded) return;
-
       const path = decoded.args.path;
       if (!path || path.length < 2) return;
-
       const tokenIn  = path[0].toLowerCase();
       const tokenOut = path[path.length - 1].toLowerCase();
       const pairKey  = `${tokenIn}:${tokenOut}`;
-
       if (!ALLOWED_PAIRS.has(pairKey)) return;
-
       const symIn  = tokenSymbol(tokenIn);
       const symOut = tokenSymbol(tokenOut);
       if (!symIn || !symOut) return;
-
-      const amountIn = decoded.args.amountIn;
       const inDecimals = symIn === 'USDC' ? 6 : 18;
-      const amountInUsdHint = rawToUsdHint(amountIn, inDecimals);
-
-      // Skip dust
-      if (amountInUsdHint < 500) return;
-
-      const dedupeKey = `${chain.name}:${pairKey}:${blockNumber}`;
+      const amountInUsdHint = rawToUsdHint(decoded.args.amountIn, inDecimals);
+      if (amountInUsdHint < 100) return;
+      const dedupeKey = `${chain.name}:${pairKey}:${blockNumber}:sushi`;
       if (isDuplicate(dedupeKey)) return;
-
-      this.submitToOrchestrator({
-        chain: chain.name,
-        tokenIn: symIn,
-        tokenOut: symOut,
-        amountInUsdHint,
-        blockNumber,
-        quoteTimestampMs: Date.now(),
-      });
-    } catch { /* non-matching function signature */ }
+      this.submitToOrchestrator({ chain: chain.name, tokenIn: symIn, tokenOut: symOut, amountInUsdHint, blockNumber, quoteTimestampMs: Date.now() });
+    } catch { /* non-matching */ }
   }
+
+  tryDecodeUniV3Swap(chain, tx, blockNumber) {
+    try {
+      // SwapRouter02 (no deadline in struct), SwapRouter01 (has deadline)
+      const ifaces = [
+        new ethers.utils.Interface(['function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256)']),
+        new ethers.utils.Interface(['function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256)']),
+      ];
+      let decoded = null;
+      for (const iface of ifaces) {
+        try { decoded = iface.parseTransaction({ data: tx.data }); break; } catch { /* try next */ }
+      }
+      if (!decoded) return;
+      const params   = decoded.args[0];
+      const tokenIn  = params.tokenIn.toLowerCase();
+      const tokenOut = params.tokenOut.toLowerCase();
+      const pairKey  = `${tokenIn}:${tokenOut}`;
+      if (!ALLOWED_PAIRS.has(pairKey)) return;
+      const symIn  = tokenSymbol(tokenIn);
+      const symOut = tokenSymbol(tokenOut);
+      if (!symIn || !symOut) return;
+      const inDecimals = symIn === 'USDC' ? 6 : 18;
+      const amountInUsdHint = rawToUsdHint(params.amountIn, inDecimals);
+      if (amountInUsdHint < 100) return;
+      const dedupeKey = `${chain.name}:${pairKey}:${blockNumber}:univ3`;
+      if (isDuplicate(dedupeKey)) return;
+      this.submitToOrchestrator({ chain: chain.name, tokenIn: symIn, tokenOut: symOut, amountInUsdHint, blockNumber, quoteTimestampMs: Date.now() });
+    } catch { /* non-matching */ }
+  }
+
 
   async submitToOrchestrator(hit) {
     // Freshness gate — drop if scanner→orchestrator handoff is stale
