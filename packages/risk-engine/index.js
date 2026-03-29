@@ -73,7 +73,8 @@ class RiskEngine {
     }
 
     reject(code, message) {
-        logger.warn(`[RISK-ENGINE] ❌ REJECTED [${code}]: ${message}`);
+        // Muted to cleanly suppress terminal telemetry spam during massive pipeline rejection arrays
+        // logger.warn(`[RISK-ENGINE] ❌ REJECTED [${code}]: ${message}`);
         return { passed: false, reason: code, details: message };
     }
 }

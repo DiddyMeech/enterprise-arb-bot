@@ -9,7 +9,7 @@ chains:
   arbitrum:
     enabled: true
     baseline_trade_size_usd: 100000
-    min_net_profit_usd: 40
+    min_net_profit_usd: 20
     target_net_profit_usd: 100
     max_gas_share_of_profit: 0.30
     max_slippage_bps: 30
@@ -29,7 +29,7 @@ chains:
   base:
     enabled: true
     baseline_trade_size_usd: 100000
-    min_net_profit_usd: 40
+    min_net_profit_usd: 20
     target_net_profit_usd: 100
     max_gas_share_of_profit: 0.30
     max_slippage_bps: 30
@@ -49,7 +49,7 @@ chains:
   bsc:
     enabled: true
     baseline_trade_size_usd: 500
-    min_net_profit_usd: 40
+    min_net_profit_usd: 20
     target_net_profit_usd: 100
     max_gas_share_of_profit: 0.30
     max_slippage_bps: 30
@@ -83,7 +83,7 @@ pairs:
     - WBNB/USDC
 
 risk:
-  min_profit_floor_usd: 40
+  min_profit_floor_usd: 20
   target_profit_floor_usd: 100
   max_route_hops: 3
   max_provider_divergence_bps: 10
