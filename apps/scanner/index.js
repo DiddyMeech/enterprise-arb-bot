@@ -68,6 +68,9 @@ class ScannerApp {
                 const block = await provider.getBlockWithTransactions(blockNumber);
                 
                 if (block && block.transactions) {
+                    // Visible heartbeat logging so the operator can actively monitor block ingestion
+                    console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${blockNumber} | ${block.transactions.length} txs scanned.`);
+                    
                     for (const tx of block.transactions) {
                         if (tx.to && tx.to.toLowerCase() === "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase()) {
                             const decoder = require('@arb/dex-adapters/uniswap-v3'); // Pancakeswap V3 structurally mimics UniswapV3
