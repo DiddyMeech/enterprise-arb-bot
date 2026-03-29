@@ -56,18 +56,19 @@ class ScannerApp {
     startPolling(chain) {
         console.log(`[SCANNER] [POLL] Launching aggressive ${chain.pollingInterval}ms block poller on ${chain.name}`);
         
-        // Engine automatically handles API key revocations (401/403) by rotating out dead RPCs dynamically
-        const fallbackConfigs = chain.rpcs.map((url, idx) => ({
-            provider: new ethers.providers.StaticJsonRpcProvider(url, chain.id),
-            priority: idx + 1,
-            stallTimeout: 2000
-        }));
-        const provider = new ethers.providers.FallbackProvider(fallbackConfigs, 1);
+        // True Round-Robin API Load Balancer distributes requests evenly rather than pinning priority 1
+        const providers = chain.rpcs.map(url => new ethers.providers.StaticJsonRpcProvider(url, chain.id));
+        let pIndex = 0;
         let lastProcessedBlock = null;
 
         const intervalId = setInterval(async () => {
             try {
-                // By syncing locally via FallbackProvider, an API key failure intrinsically shifts to the standby node
+                if (providers.length === 0) return;
+                
+                // Fetch the active node in the rotation queue and cycle the pointer forward
+                const provider = providers[pIndex];
+                pIndex = (pIndex + 1) % providers.length;
+
                 const latestBlockNumber = await provider.getBlockNumber();
                 
                 if (lastProcessedBlock === null) {
