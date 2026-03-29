@@ -89,31 +89,11 @@ class BinanceScanner {
     }
 
     triggerDecisionEngine(symbol, price) {
-        // Map isolated CEX targets directly to on-chain execution proxies dynamically
+        // Log volatility signal only — execution pipeline is handled by arb-scanner
         const targetToken = symbol.replace('USDT', '');
-        const targetChain = ['ARBUSDT'].includes(symbol) ? 'Arbitrum' : ['BNBUSDT'].includes(symbol) ? 'BSC' : 'Base';
-        
-        const payload = {
-            id: `HFT_${symbol}_${Date.now()}`,
-            chain: targetChain,
-            dexCombo: "UniswapV3_PancakeSwapV3",
-            tokenIn: targetToken,
-            tokenOut: "USDC",
-            routeSignature: `CEX_DEX_PROXY_${symbol}`
-        };
-
-        // For the Phase 4 implementation mapping simulation, immediately ping the executor loop to hunt the live chain arrays
-        const simulateMock = async (o) => ({
-            passed: true, status: 'SUCCESS', expectedGrossUsd: 1850.00, expectedNetUsd: 1800.00, gasEstimateUsd: 25.00, relayerEstimateUsd: 25.00, slippageEstimateBps: 2, revertReason: null
-        });
-        const executeMock = async (o, sizeUsd, sim) => ({
-            execId: o.id, status: 'WIN', netProfitUsd: 1800.00, gasPaidUsd: 25.00, realizedSlippageBps: 2, latencyMs: 25, quoteDriftBps: 0, revertReason: null
-        });
-
-        decisionEngine.evaluatePipeline(payload, simulateMock, executeMock).catch(err => {
-            console.error(`[CEX-DEX] HFT Injection Bypass Fault: ${err.message}`);
-        });
+        console.log(`[CEX-DEX] 📊 Volatility signal: ${symbol} @ ${price} | Forwarded to arb-scanner price monitor`);
     }
+
 }
 
 new BinanceScanner();
