@@ -231,13 +231,9 @@ class PricePoller {
 
       if (divBps < DIVERGENCE_THRESHOLD_BPS) return;
 
-      // Determine which direction is profitable
-      const buyOnSushi = univ3WethOut > sushiWethOut; // buy WETH on Sushi (cheaper), sell on UniV3
-      const tokenIn  = 'USDC';
-      const tokenOut = 'WETH';
-      const probeUsd = 10; // 10 USDC probe
-
-      const dedupeKey = `${this.chain}:${tokenIn}:${tokenOut}:${divBps}`;
+      // At 44 bps on $500 = $2.20 gross, above $1.80 gas threshold
+      const tradeUsdHint = 500;
+      const dedupeKey = `${this.chain}:${tokenIn}:${tokenOut}:${Math.floor(divBps / 5)}`;
       if (isDuplicate(dedupeKey)) return;
 
       console.log(`[SCANNER] [PRICE-DIV] ${this.chain} | USDC/WETH | Sushi vs UniV3 divergence: ${divBps} bps | buyOnSushi=${buyOnSushi}`);
@@ -249,8 +245,8 @@ class PricePoller {
         tokenOut,
         dexBuy: buyOnSushi ? 'sushi' : 'univ3',
         dexSell: buyOnSushi ? 'univ3' : 'sushi',
-        amountInUsdHint: probeUsd,
-        quotedGrossProfitUsd: probeUsd * (divBps / 10000),
+        amountInUsdHint: tradeUsdHint,
+        quotedGrossProfitUsd: tradeUsdHint * (divBps / 10000),
         estimatedGasUsd: 1.8,
         estimatedPriceImpactBps: divBps,
         minObservedPoolLiquidityUsd: 500_000,
