@@ -79,6 +79,14 @@ tokens:
     - LINK
     - UNI
     - WSTETH
+    - BRETT
+    - DEGEN
+    - TOSHI
+    - HIGHER
+    - PENDLE
+    - GMX
+    - MAGIC
+    - BOOP
 
 pairs:
   approved:
@@ -98,6 +106,14 @@ pairs:
     - WSTETH/WETH
     - DAI/USDC
     - DAI/USDT
+    - BRETT/WETH
+    - DEGEN/WETH
+    - TOSHI/WETH
+    - HIGHER/WETH
+    - PENDLE/WETH
+    - GMX/WETH
+    - MAGIC/WETH
+    - BOOP/WETH
 
 risk:
   min_profit_floor_usd: 5
