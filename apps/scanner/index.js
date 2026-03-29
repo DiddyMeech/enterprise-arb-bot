@@ -13,6 +13,9 @@ class ScannerApp {
 
     start() {
         for (const [key, chain] of Object.entries(this.chains)) {
+            // Operator request: temporarily drop Optimism until Infura nodes are fully permissioned
+            if (chain.name === 'Optimism') continue;
+
             if (chain.wss) {
                 this.startWebsocket(chain);
             } else if (chain.pollingInterval) {
