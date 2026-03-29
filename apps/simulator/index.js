@@ -1,60 +1,111 @@
-const { ethers } = require('ethers');
-const config = require('@arb/config');
-const { logger } = require('@arb/telemetry');
-const ProfitEngine = require('@arb/profit-engine');
+const { ethers } = require("ethers");
+const config = require("@arb/config");
+const { logger } = require("@arb/telemetry");
+const { evaluateOpportunity } = require("@arb/trade-decision-engine");
 
-class SimulatorApp {
-    constructor() {
-        this.profitEngine = new ProfitEngine();
-        this.wallet = new ethers.Wallet(config.PRIVATE_KEY); // Holds credentials for testing
-        logger.info("[SIMULATOR] Launching callStatic verification node");
-    }
-
-    async processQueueEvent(opportunityPayload) {
-        const chain = Object.values(config.CHAINS).find(c => c.name === opportunityPayload.chain);
-        const provider = new ethers.providers.JsonRpcProvider(chain.rpcs[0]);
-
-        logger.info(`[SIMULATOR] Evaluating ${opportunityPayload.dexCombo} route on ${chain.name}`);
-        
-        try {
-            // Awaiting ArbContract execution logic via Ethers callStatic. 
-            // It inherently calculates exact execution slippage precisely.
-            
-            const gasPrice = await provider.getGasPrice();
-            const simulatedGasLimit = ethers.BigNumber.from(300000); 
-            
-            // Simulating EVM responses prior to broadcasting
-            const inputNative = opportunityPayload.amountIn;
-            const revenueNative = inputNative.add(ethers.utils.parseEther("0.05")); 
-            
-            const ethPriceUsd = 3500; // Simulated Oracle
-            const poolAgeDays = 14;   
-            
-            // Evaluate strictly against the configured $40 threshold constraints
-            const evaluation = this.profitEngine.evaluateOpportunity(
-                revenueNative,
-                inputNative,
-                simulatedGasLimit,
-                gasPrice,
-                ethPriceUsd,
-                poolAgeDays
-            );
-
-            if (evaluation.approved) {
-                logger.info(`[SIMULATOR] Trade Validated! Expected Net: $${evaluation.metrics.netProfitUsd.toFixed(2)}`);
-                // Passes evaluation block object over MQ directly to the Executor service
-            } else {
-                logger.info(`[SIMULATOR] Trade Rejected: ${evaluation.reason}`);
-            }
-            
-        } catch (error) {
-            logger.error(`[SIMULATOR] EVM Execution Halted / Reverted: ${error.message}`);
-        }
-    }
+class RouteMemory {
+  // Simple stub for RouteMemory implementation
+  has(id) { return false; }
+  set(id, val) { }
 }
 
-const sim = new SimulatorApp();
-module.exports = sim;
+class SimulatorApp {
+  constructor() {
+    this.memory = new RouteMemory();
+    logger.info("[SIMULATOR] Booted exact-route simulation service");
+  }
 
-// Keep simulator active in PM2 while waiting for MQ hooks
+  getProviderForChain(chainName) {
+    const chain = Object.values(config.CHAINS).find((c) => c.name === chainName);
+    if (!chain) {
+      throw new Error(`Unknown chain: ${chainName}`);
+    }
+    return {
+      chain,
+      provider: new ethers.providers.JsonRpcProvider(chain.rpcs[0]),
+    };
+  }
+
+  async quoteExactRoute(opp, amountInUsd) {
+    if (!opp.routePlan || !opp.routePlan.legs || opp.routePlan.legs.length === 0) {
+      return { ok: false, reason: "QUOTE_FAILED" };
+    }
+
+    return {
+      ok: true,
+      route: {
+        chain: opp.chain,
+        legs: opp.routePlan.legs,
+        amountInUsd,
+        expectedAmountOutRaw: opp.routePlan.expectedAmountOutRaw || "0",
+        expectedGrossProfitUsd: opp.quotedGrossProfitUsd,
+      },
+      grossProfitUsd: opp.quotedGrossProfitUsd,
+      gasUsd: opp.estimatedGasUsd,
+      dexFeesUsd: opp.routePlan.dexFeesUsd || 0,
+      flashLoanFeeUsd: opp.routePlan.flashLoanFeeUsd || 0,
+      amountOutRaw: opp.routePlan.expectedAmountOutRaw || "0",
+    };
+  }
+
+  async simulateExactExecution({ opp, amountInUsd, mode, route, maxSlippageBps }) {
+    const { provider } = this.getProviderForChain(opp.chain);
+
+    if (!route?.legs?.length) {
+      return {
+        ok: false,
+        mode,
+        decodedReason: "ROUTE_ENCODING_INVALID",
+        reason: "ROUTE_ENCODING_INVALID",
+      };
+    }
+
+    try {
+      // Replace this section with the actual calldata builder + eth_call path.
+      // This is intentionally strict: simulator must reject if exact execution inputs are missing.
+      if (!opp.executionPlan || !opp.executionPlan.calldata) {
+        return {
+          ok: false,
+          mode,
+          decodedReason: "CALLDATA_MISSING",
+          reason: "ROUTE_ENCODING_INVALID",
+        };
+      }
+
+      await provider.call({
+        to: opp.executionPlan.target, // Re-mapped execution plan
+        data: opp.executionPlan.calldata,
+      });
+
+      return {
+        ok: true,
+        mode,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        mode,
+        rawError: error,
+        decodedReason: error?.reason || error?.message || "UNKNOWN_REVERT",
+        reason: "REVERTED_OR_IMPOSSIBLE",
+      };
+    }
+  }
+
+  async processQueueEvent(opportunityPayload) {
+    const result = await evaluateOpportunity(
+      opportunityPayload,
+      {
+        quoteExactRoute: this.quoteExactRoute.bind(this),
+        simulateExactExecution: this.simulateExactExecution.bind(this),
+        log: (msg, payload) => logger.info(msg, payload || {}),
+      },
+      this.memory, // Stubbed memory fallback
+    );
+
+    return result;
+  }
+}
+
+module.exports = new SimulatorApp();
 setInterval(() => {}, 60000);

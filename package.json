@@ -7,9 +7,10 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "npm run build -w @arb/trade-decision-engine",
     "start:scanner": "node apps/scanner/index.js",
-    "start:simulator": "node apps/simulator/index.js",
-    "start:executor": "node apps/executor/index.js",
+    "start:simulator": "npm run build && node apps/simulator/index.js",
+    "start:executor": "npm run build && node apps/executor/index.js",
     "start:learner": "node apps/learner/index.js",
     "start:coordinator": "node apps/coordinator/index.js",
     "start:dashboard": "node apps/dashboard/index.js",
