@@ -1,7 +1,7 @@
 const { ethers } = require("ethers");
 const config = require("@arb/config");
 const { logger } = require("@arb/telemetry");
-const { evaluateOpportunity } = require("@arb/trade-decision-engine");
+const { evaluateOpportunity, buildExecutionPlan } = require("@arb/trade-decision-engine");
 
 class RouteMemory {
   // Simple stub for RouteMemory implementation
@@ -12,22 +12,22 @@ class RouteMemory {
 class SimulatorApp {
   constructor() {
     this.memory = new RouteMemory();
-    logger.info("[SIMULATOR] Booted exact-route simulation service");
+    logger.info("[SIMULATOR] Booted exact-route simulator");
   }
 
-  getProviderForChain(chainName) {
+  getChain(chainName) {
     const chain = Object.values(config.CHAINS).find((c) => c.name === chainName);
-    if (!chain) {
-      throw new Error(`Unknown chain: ${chainName}`);
-    }
-    return {
-      chain,
-      provider: new ethers.providers.JsonRpcProvider(chain.rpcs[0]),
-    };
+    if (!chain) throw new Error(`Unknown chain ${chainName}`);
+    return chain;
+  }
+
+  getProvider(chainName) {
+    const chain = this.getChain(chainName);
+    return new ethers.providers.JsonRpcProvider(chain.rpcs[0]);
   }
 
   async quoteExactRoute(opp, amountInUsd) {
-    if (!opp.routePlan || !opp.routePlan.legs || opp.routePlan.legs.length === 0) {
+    if (!opp.routePlan?.legs?.length) {
       return { ok: false, reason: "QUOTE_FAILED" };
     }
 
@@ -38,48 +38,62 @@ class SimulatorApp {
         legs: opp.routePlan.legs,
         amountInUsd,
         expectedAmountOutRaw: opp.routePlan.expectedAmountOutRaw || "0",
-        expectedGrossProfitUsd: opp.quotedGrossProfitUsd,
+        expectedGrossProfitUsd: opp.quotedGrossProfitUsd
       },
       grossProfitUsd: opp.quotedGrossProfitUsd,
       gasUsd: opp.estimatedGasUsd,
       dexFeesUsd: opp.routePlan.dexFeesUsd || 0,
       flashLoanFeeUsd: opp.routePlan.flashLoanFeeUsd || 0,
-      amountOutRaw: opp.routePlan.expectedAmountOutRaw || "0",
+      amountOutRaw: opp.routePlan.expectedAmountOutRaw || "0"
     };
   }
 
   async simulateExactExecution({ opp, amountInUsd, mode, route, maxSlippageBps }) {
-    const { provider } = this.getProviderForChain(opp.chain);
-
-    if (!route?.legs?.length) {
-      return {
-        ok: false,
-        mode,
-        decodedReason: "ROUTE_ENCODING_INVALID",
-        reason: "ROUTE_ENCODING_INVALID",
-      };
-    }
+    const provider = this.getProvider(opp.chain);
+    const chain = this.getChain(opp.chain);
 
     try {
-      // Replace this section with the actual calldata builder + eth_call path.
-      // This is intentionally strict: simulator must reject if exact execution inputs are missing.
-      if (!opp.executionPlan || !opp.executionPlan.calldata) {
+      if (!opp.routePlan?.legs?.length) {
         return {
           ok: false,
           mode,
-          decodedReason: "CALLDATA_MISSING",
-          reason: "ROUTE_ENCODING_INVALID",
+          decodedReason: "ROUTE_ENCODING_INVALID",
+          reason: "ROUTE_ENCODING_INVALID"
         };
       }
 
+      const minOutRaw =
+        opp.routePlan.minOutRaw ||
+        opp.routePlan.expectedAmountOutRaw ||
+        "0";
+
+      const deadline =
+        Math.floor(Date.now() / 1000) + 20;
+
+      const executionPlan = buildExecutionPlan({
+        executorAddress: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
+        mode,
+        route: {
+          chain: opp.chain,
+          tokenIn: opp.tokenInAddress || opp.tokenIn,
+          tokenOut: opp.tokenOutAddress || opp.tokenOut,
+          amountInRaw: opp.amountInRaw,
+          minProfitTokenRaw: opp.minProfitTokenRaw || "0",
+          minOutRaw,
+          deadline,
+          legs: opp.routePlan.legs
+        },
+        gasLimit: 700000
+      });
+
       await provider.call({
-        to: opp.executionPlan.target, // Re-mapped execution plan
-        data: opp.executionPlan.calldata,
+        to: executionPlan.target,
+        data: executionPlan.calldata
       });
 
       return {
         ok: true,
-        mode,
+        mode
       };
     } catch (error) {
       return {
@@ -87,23 +101,21 @@ class SimulatorApp {
         mode,
         rawError: error,
         decodedReason: error?.reason || error?.message || "UNKNOWN_REVERT",
-        reason: "REVERTED_OR_IMPOSSIBLE",
+        reason: "REVERTED_OR_IMPOSSIBLE"
       };
     }
   }
 
   async processQueueEvent(opportunityPayload) {
-    const result = await evaluateOpportunity(
+    return await evaluateOpportunity(
       opportunityPayload,
       {
         quoteExactRoute: this.quoteExactRoute.bind(this),
         simulateExactExecution: this.simulateExactExecution.bind(this),
-        log: (msg, payload) => logger.info(msg, payload || {}),
+        log: (msg, payload) => logger.info(msg, payload || {})
       },
-      this.memory, // Stubbed memory fallback
+      this.memory
     );
-
-    return result;
   }
 }
 

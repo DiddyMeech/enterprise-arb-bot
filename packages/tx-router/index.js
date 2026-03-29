@@ -1,42 +1,40 @@
-const { ethers } = require('ethers');
+const { ethers } = require("ethers");
 
 class TxRouter {
-    constructor(arbContractAddress, provider, wallet) {
-        this.arbContractAddress = arbContractAddress;
-        this.provider = provider;
-        this.wallet = wallet;
-        
-        // Native Aave V3 MevRouter Interface map
-        const abi = [
-            "function requestFlashLoan(address asset, uint256 amount, bytes calldata params) external"
-        ];
-        this.contract = new ethers.Contract(this.arbContractAddress, abi, this.wallet);
+  constructor(arbContractAddress, provider, wallet) {
+    this.arbContractAddress = arbContractAddress;
+    this.provider = provider;
+    this.wallet = wallet;
+  }
+
+  async buildPayload(tokenIn, amountInRaw, targets, payloads, opts = {}) {
+    if (!targets?.length || !payloads?.length) {
+      throw new Error("TxRouter.buildPayload called without route targets/payloads");
     }
 
-    async buildPayload(asset, amount, targets, payloads, gasParams) {
-        // Strict transaction generation handling internal nonces
-        const nonce = await this.provider.getTransactionCount(this.wallet.address);
-        
-        // Dynamically encode the DEX array instructions into raw bytes for Aave executeOperation extraction
-        const innerParams = ethers.utils.defaultAbiCoder.encode(
-            ['address[]', 'bytes[]'], 
-            [targets || [], payloads || []]
-        );
+    const tx = {
+      to: this.arbContractAddress,
+      data: opts.calldata,
+      value: opts.value || 0,
+      gasLimit: opts.gasLimit || 700000,
+      ...(opts.targetGasPrice ? { gasPrice: opts.targetGasPrice } : {})
+    };
 
-        const tx = await this.contract.populateTransaction.requestFlashLoan(
-            asset,
-            amount,
-            innerParams,
-            {
-                gasLimit: gasParams.gasLimit || 500000, // Flashloans execute multi-hop logic requiring higher gas ceiling
-                maxFeePerGas: gasParams.targetGasPrice, // EIP-1559 standard execution
-                maxPriorityFeePerGas: gasParams.targetGasPrice, 
-                nonce
-            }
-        );
-        
-        return await this.wallet.signTransaction(tx);
+    if (!tx.data) {
+      throw new Error("TxRouter.buildPayload requires canonical calldata");
     }
+
+    return await this.wallet.signTransaction(tx);
+  }
+
+  async estimateGas(calldata, value = 0) {
+    return await this.provider.estimateGas({
+      from: this.wallet.address,
+      to: this.arbContractAddress,
+      data: calldata,
+      value
+    });
+  }
 }
 
 module.exports = TxRouter;

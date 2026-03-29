@@ -8,16 +8,11 @@ class MEVRelayer {
     this.chainName = chainName;
 
     const chain = Object.values(config.CHAINS).find((c) => c.name === chainName);
-    if (!chain || !chain.rpcs?.length) {
-      throw new Error(`No RPCs configured for chain ${chainName}`);
+    if (!chain?.rpcs?.length) {
+      throw new Error(`No RPCs configured for ${chainName}`);
     }
 
     this.provider = new ethers.providers.JsonRpcProvider(chain.rpcs[0]);
-
-    if (!config.PRIVATE_KEY) {
-      throw new Error("No PRIVATE_KEY configured for MEV relayer");
-    }
-
     this.wallet = new ethers.Wallet(config.PRIVATE_KEY, this.provider);
     this.bloxrouteAuth = process.env.BLOXROUTE_AUTH_HEADER || "";
     this.flashbotsAuth = process.env.FLASHBOTS_KEY || "";
@@ -25,16 +20,16 @@ class MEVRelayer {
 
   async broadcastBundle(signedTx) {
     if (config.SAFE_MODE) {
-      logger.warn("[MEV-ENGINE] SAFE_MODE active; skipping live broadcast");
+      logger.warn("[MEV] SAFE_MODE active; skipping broadcast");
       return {
         ok: true,
         status: "SIMULATED_SUCCESS",
-        execId: `dry_run_exec_${Date.now()}`,
+        execId: `dry_run_exec_${Date.now()}`
       };
     }
 
-    let accepted = false;
     const results = [];
+    let accepted = false;
 
     for (const relayUrl of this.relays) {
       try {
@@ -43,14 +38,16 @@ class MEVRelayer {
           headers: {
             "Content-Type": "application/json",
             ...(this.bloxrouteAuth ? { Authorization: this.bloxrouteAuth } : {}),
-            ...(this.flashbotsAuth ? { "X-Flashbots-Signature": `${this.wallet.address}:${this.flashbotsAuth}` } : {}),
+            ...(this.flashbotsAuth
+              ? { "X-Flashbots-Signature": `${this.wallet.address}:${this.flashbotsAuth}` }
+              : {})
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
             id: 1,
             method: "eth_sendRawTransaction",
-            params: [signedTx],
-          }),
+            params: [signedTx]
+          })
         });
 
         const body = await response.text();
@@ -58,25 +55,25 @@ class MEVRelayer {
 
         if (response.ok) {
           accepted = true;
-          logger.info("[MEV-ENGINE] Relay accepted payload", { relayUrl, chain: this.chainName });
+          logger.info("[MEV] Relay accepted payload", { relayUrl, chain: this.chainName });
         } else {
-          logger.warn("[MEV-ENGINE] Relay rejected payload", { relayUrl, status: response.status });
+          logger.warn("[MEV] Relay rejected payload", { relayUrl, status: response.status });
         }
       } catch (error) {
         results.push({ relayUrl, error: String(error) });
-        logger.error("[MEV-ENGINE] Relay request failed", { relayUrl, error: String(error) });
+        logger.error("[MEV] Relay request failed", { relayUrl, error: String(error) });
       }
     }
 
     if (!accepted) {
-      throw new Error("No relay accepted broadcast");
+      throw new Error("No relay accepted the transaction");
     }
 
     return {
       ok: true,
       status: "PENDING",
       execId: `live_exec_${Date.now()}`,
-      relayResults: results,
+      relayResults: results
     };
   }
 }
