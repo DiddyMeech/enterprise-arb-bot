@@ -28,8 +28,9 @@ const UNIV3_QUOTER_ARB  = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6'; // Quote
 const UNIV3_POOL_FEE    = 500; // 0.05%
 
 const POLL_INTERVAL_MS           = 3000;   // poll every 3 seconds
-const DIVERGENCE_THRESHOLD_BPS   = 10;     // emit if >= 10 bps (0.10%) divergence
+const DIVERGENCE_THRESHOLD_BPS   = 30;     // emit if >= 30 bps (0.30%) divergence — filters noise
 const PROBE_AMOUNT_USDC          = '10000000'; // 10 USDC (6 decimals) probe quote
+const TRADE_USD_HINT             = 1000;   // $1000 hint: 30 bps * $1000 = $3 gross > $1.80 gas
 const ETH_PRICE_USD_HINT         = 2200;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -231,12 +232,15 @@ class PricePoller {
 
       if (divBps < DIVERGENCE_THRESHOLD_BPS) return;
 
-      // At 44 bps on $500 = $2.20 gross, above $1.80 gas threshold
-      const tradeUsdHint = 500;
+      // $1000 * divBps/10000 gross profit; reject if doesn't cover gas
+      const grossProfit = TRADE_USD_HINT * (divBps / 10000);
+      const gasUsd = 1.8;
+      if (grossProfit <= gasUsd) return; // net negative — skip
+
       const dedupeKey = `${this.chain}:${tokenIn}:${tokenOut}:${Math.floor(divBps / 5)}`;
       if (isDuplicate(dedupeKey)) return;
 
-      console.log(`[SCANNER] [PRICE-DIV] ${this.chain} | USDC/WETH | Sushi vs UniV3 divergence: ${divBps} bps | buyOnSushi=${buyOnSushi}`);
+      console.log(`[SCANNER] [PRICE-DIV] ${this.chain} | USDC/WETH | divergence: ${divBps} bps | gross=$${grossProfit.toFixed(2)} | buyOnSushi=${buyOnSushi}`);
 
       const opp = {
         id: randomUUID(),
@@ -245,9 +249,9 @@ class PricePoller {
         tokenOut,
         dexBuy: buyOnSushi ? 'sushi' : 'univ3',
         dexSell: buyOnSushi ? 'univ3' : 'sushi',
-        amountInUsdHint: tradeUsdHint,
-        quotedGrossProfitUsd: tradeUsdHint * (divBps / 10000),
-        estimatedGasUsd: 1.8,
+        amountInUsdHint: TRADE_USD_HINT,
+        quotedGrossProfitUsd: grossProfit,
+        estimatedGasUsd: gasUsd,
         estimatedPriceImpactBps: divBps,
         minObservedPoolLiquidityUsd: 500_000,
         minObserved24hVolumeUsd: 1_000_000,
