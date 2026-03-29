@@ -16,6 +16,8 @@ module.exports = {
       name: "arbitrum",
       chainId: 42161,
       rpcs: [
+        // Premium nodes first (Alchemy/Infura rotation)
+        ...(process.env.ARB_RPC_NODES ? process.env.ARB_RPC_NODES.split(',').map(s => s.trim()).filter(Boolean) : []),
         process.env.ARB_RPC_EXEC,
         process.env.ARB_RPC_SCAN,
         process.env.ARB_RPC_CONF
@@ -28,6 +30,7 @@ module.exports = {
       name: "base",
       chainId: 8453,
       rpcs: [
+        ...(process.env.BASE_RPC_NODES ? process.env.BASE_RPC_NODES.split(',').map(s => s.trim()).filter(Boolean) : []),
         process.env.BASE_RPC_EXEC,
         process.env.BASE_RPC_SCAN,
         process.env.BASE_RPC_CONF
