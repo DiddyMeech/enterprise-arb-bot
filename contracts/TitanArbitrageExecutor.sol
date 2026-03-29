@@ -5,6 +5,10 @@ import {FlashLoanSimpleReceiverBase} from "@aave/core-v3/contracts/flashloan/bas
 import {IPoolAddressesProvider} from "@aave/core-v3/contracts/interfaces/IPoolAddressesProvider.sol";
 import {IERC20} from "@aave/core-v3/contracts/dependencies/openzeppelin/contracts/IERC20.sol";
 
+interface IWETH {
+    function withdraw(uint wad) external;
+}
+
 contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
     address payable public immutable owner;
     address public immutable botExecutor;
@@ -23,7 +27,7 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
 
     modifier onlyExecutor() {
         require(!isKilled, "KILLED: Emergency circuit breaker active");
-        require(msg.sender == owner || msg.sender == botExecutor, "UNAUTHORIZED: Executor Only");
+        require(msg.sender == owner || msg.sender == botExecutor || msg.sender == address(this), "UNAUTHORIZED: Executor Only");
         _;
     }
 
@@ -90,6 +94,15 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
 
     function killSwitch() external onlyOwner {
         isKilled = !isKilled; // Toggles the circuit breaker
+    }
+
+    function unwrapWETH(address weth, uint256 amount) external onlyExecutor {
+        IWETH(weth).withdraw(amount);
+    }
+
+    function bribeMiner(uint256 amount) external onlyExecutor {
+        require(address(this).balance >= amount, "INSUFFICIENT_ETH_FOR_BRIBE");
+        block.coinbase.transfer(amount);
     }
 
     receive() external payable {}
