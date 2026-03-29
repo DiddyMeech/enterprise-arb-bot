@@ -71,7 +71,7 @@ const config = {
             name: "Optimism",
             contractAddress: process.env.OP_CONTRACT_ADDRESS,
             pollingInterval: 100, 
-            wss: process.env.OP_WSS_SCAN, 
+            // wss: process.env.OP_WSS_SCAN, // Disabled: Infura OP does not support pending tx subscriptions.
             rpcs: [
                 process.env.OP_RPC_SCAN,
                 process.env.OP_RPC_EXEC,

@@ -69,6 +69,13 @@ class TradeDecisionEngine {
             const gasMetrics = { totalCostUsd: simulation.gasEstimateUsd + simulation.relayerEstimateUsd };
             logger.debug(`[DECISION-ENGINE] 6. profit_calculation -> EXPECTED NET: $${simulation.expectedNetUsd.toFixed(2)}`);
 
+            // [CRITICAL] 6.b Hard Minimum Profit Validation ($5.00 Floor)
+            if (simulation.expectedNetUsd < 5.00) {
+                logger.warn(`[DECISION-ENGINE] 6.b profit_gate -> REJECTED (Expected Net $${simulation.expectedNetUsd.toFixed(2)} is mathematically below the massive $5.00 threshold)`);
+                await learningEngine.recordDecision(opp, { status: 'REJECTED_PROFIT_FLOOR', reason: 'BELOW_MINIMUM_5_USD' }, score);
+                return;
+            }
+
             // 7. Risk Gate Evaluation
             const riskCheck = riskEngine.evaluateRisk(opp, simulation, gasMetrics, activeMetrics);
             if (!riskCheck.passed) {

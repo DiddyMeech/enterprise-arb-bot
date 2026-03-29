@@ -25,8 +25,12 @@ class RiskEngine {
                 return this.reject('NEGATIVE_GROSS_PROFIT', `Simulation guarantees structural gross loss. Expected: ${expectedGrossUsd.toFixed(2)} USD.`);
             }
 
-            if (expectedNetUsd < chainPolicy.min_net_profit_usd) {
-                return this.reject('NET_PROFIT_BELOW_MINIMUM', `Net yield (${expectedNetUsd.toFixed(2)} USD) is below the configured floor of ${chainPolicy.min_net_profit_usd} USD.`);
+            if (expectedNetUsd < chainPolicy.min_net_profit_usd && expectedNetUsd < 5.00) {
+                return this.reject('NET_PROFIT_BELOW_MINIMUM', `Net yield (${expectedNetUsd.toFixed(2)} USD) is completely below both the configured floor and the strict $5.00 margin block.`);
+            }
+
+            if (expectedNetUsd < 5.00) {
+                return this.reject('NET_PROFIT_BELOW_USER_MARGIN_5_USD', `Net yield (${expectedNetUsd.toFixed(2)} USD) is below the firm $5.00 Operator hard-cap requirement.`);
             }
 
             // 2. Gas Spend Ratio Limit
