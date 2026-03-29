@@ -17,7 +17,8 @@
     "start:spatial": "node apps/spatial-scanner/index.js",
     "start:overseer": "node apps/overseer/index.js",
     "deploy:base": "node scripts/deploy.js base",
-    "deploy:arb": "node scripts/deploy.js arbitrum"
+    "deploy:arb": "node scripts/deploy.js arbitrum",
+    "deploy:bsc": "node scripts/deploy.js bsc"
   },
   "dependencies": {
     "cors": "^2.8.6",
