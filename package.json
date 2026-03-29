@@ -7,7 +7,14 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @arb/trade-decision-engine",
+    "build:decision-engine": "npm run build -w @arb/trade-decision-engine",
+    "build": "npm run build:decision-engine",
+    "verify:executor:arb": "npm run build && node scripts/verify-executor-selectors.js arbitrum",
+    "verify:executor:base": "npm run build && node scripts/verify-executor-selectors.js base",
+    "smoke:arb:wallet": "npm run build && node scripts/known-good-route-smoke-test.js arbitrum wallet",
+    "smoke:arb:flash": "npm run build && node scripts/known-good-route-smoke-test.js arbitrum flash",
+    "smoke:base:wallet": "npm run build && node scripts/known-good-route-smoke-test.js base wallet",
+    "smoke:base:flash": "npm run build && node scripts/known-good-route-smoke-test.js base flash",
     "start:scanner": "node apps/scanner/index.js",
     "start:simulator": "npm run build && node apps/simulator/index.js",
     "start:executor": "npm run build && node apps/executor/index.js",
