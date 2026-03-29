@@ -82,8 +82,16 @@ class ScannerApp {
                             // Visible heartbeat logging so the operator can actively monitor block ingestion
                             console.log(`[SCANNER] [HEARTBEAT] ${chain.name} | Block ${currentBlock} | ${block.transactions.length} txs scanned.`);
                             
+                            // Aggressive mempool coverage: Include standard Uniswap V3 and Universal Routers instead of just PancakeSwap
+                            const targetRouters = [
+                                "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase(), // PancakeSwap V3
+                                "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45".toLowerCase(), // Uniswap V3 Router 2
+                                "0xE592427A0AEce92De3Edee1F18E0157C05861564".toLowerCase(), // Uniswap V3 Router 1
+                                "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD".toLowerCase()  // Uniswap Universal Router
+                            ];
+
                             for (const tx of block.transactions) {
-                                if (tx.to && tx.to.toLowerCase() === "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".toLowerCase()) {
+                                if (tx.to && targetRouters.includes(tx.to.toLowerCase())) {
                                     const decoder = require('@arb/dex-adapters/uniswap-v3'); // Pancakeswap V3 structurally mimics UniswapV3
                                     const decoded = decoder.decodeSwap(tx);
                                     if (decoded) {
