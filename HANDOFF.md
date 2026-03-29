@@ -23,6 +23,11 @@ We have successfully completed **Phases 1 through 13.b** of the Titan 2.0 Archit
 - **Active Telemetry:** The environment is constrained aggressively at a `$20` profit threshold to safely hunt high-frequency margins.
 - **LLM Machine Learning:** `apps/overseer/index.js` autonomously queries Anthropic Claude 3.5 Sonnet to mutate the `.env` execution constraints and optimize performance across the `execution_results` table every 2 hours natively via Node.js v22.
 
+### D. Institutional Execution Engine Constraints (Phase 13.c)
+- **Aggressive Execution Verification:** Expanded the `@arb/trade-decision-engine` to heavily filter out low-liquidity Memecoins and "fake-spread" altcoins across Base and Arbitrum. Execution is strictly locked to absolute Tier-1 synthetic assets (WETH, USDC, DAI) to prevent catastrophic slippage failures during live flash-loans.
+- **Profit Scaling Engine:** Lifted the hardcoded minimum profit arrays from `$5` to `$50` globally inside `config/risk-policy.yaml`. The target profit floor is strictly constrained at `$150`.
+- **Architecture Staging:** The overarching multi-size simulation strategy has been natively transpiled from TS to JS and pushed dynamically to the VPS Droplet inside `packages/trade-decision-engine/execution-engine.js`. The environment is formally waiting for the `failure-classifier.ts` schema to complete the pipeline replacement.
+
 ## 3. Phase 6 Master Blueprint: The 10-Node MEV Swarm (Horizontal Scaling)
 The core trading pipeline is officially complete and actively discovering live MEV spreads passively on the cloud master node (Node 1). To scale to an institutional 10-node array without fragmenting CPU efficiency or hitting API limits, you must physically provision independent droplets and assign them isolated ecosystem territory.
 
