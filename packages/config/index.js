@@ -46,7 +46,7 @@ const config = {
             id: 42161,
             name: "Arbitrum",
             contractAddress: process.env.ARB_CONTRACT_ADDRESS,
-            pollingInterval: 100, 
+            pollingInterval: 1000, // Throttled to prevent 402/429 limits
             // wss: process.env.ARB_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
             rpcs: [
                 process.env.ARB_RPC_SCAN,
@@ -58,7 +58,7 @@ const config = {
             id: 8453,
             name: "Base",
             contractAddress: process.env.BASE_CONTRACT_ADDRESS,
-            pollingInterval: 200, 
+            pollingInterval: 1000, // Throttled to prevent 402/429 limits
             // wss: process.env.BASE_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
             rpcs: [
                 process.env.BASE_RPC_SCAN,
@@ -70,7 +70,7 @@ const config = {
             id: 10,
             name: "Optimism",
             contractAddress: process.env.OP_CONTRACT_ADDRESS,
-            pollingInterval: 100, 
+            pollingInterval: 1000,  // Throttled to prevent 402/429 limits
             // wss: process.env.OP_WSS_SCAN, // Disabled: Infura OP does not support pending tx subscriptions.
             rpcs: [
                 process.env.OP_RPC_SCAN,
