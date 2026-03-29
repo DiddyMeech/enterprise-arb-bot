@@ -29,11 +29,25 @@ class BinanceScanner {
     }
 
     init() {
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 20;
+
         this.socket.on('message', (data) => this.process(data));
         this.socket.on('error', (e) => console.error(`[CEX-DEX] WebSocket Extraneous Fault: ${e.message}`));
         this.socket.on('close', () => {
-            console.warn(`[CEX-DEX] Disconnected. Re-binding aggressively.`);
-            setTimeout(() => new BinanceScanner(), 100); // 100ms rebound latency
+            console.warn(`[CEX-DEX] Disconnected.`);
+            this.reconnectAttempts++;
+
+            if (this.reconnectAttempts > this.maxReconnectAttempts) {
+                console.error('[CEX-DEX] Max reconnect attempts reached — exiting for PM2 restart.');
+                process.exit(1);
+            }
+
+            // Exponential backoff: 5s base, doubles each attempt, max 120s, +25% jitter
+            const base = Math.min(5000 * Math.pow(2, this.reconnectAttempts - 1), 120000);
+            const delay = base + Math.random() * base * 0.25;
+            console.warn(`[CEX-DEX] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+            setTimeout(() => new BinanceScanner(), delay);
         });
     }
 
