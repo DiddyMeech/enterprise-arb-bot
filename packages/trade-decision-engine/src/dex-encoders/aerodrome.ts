@@ -19,6 +19,8 @@ export function encodeAerodromeLeg(leg: NormalizedDexLeg): EncodedDexLeg {
   return {
     dex: "aerodrome",
     target: leg.target,
+    tokenIn: leg.tokenIn,
+    tokenOut: leg.tokenOut,
     calldata,
     value: "0",
     debug: {

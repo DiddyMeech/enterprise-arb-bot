@@ -17,6 +17,8 @@ export function encodeSushiLeg(leg: NormalizedDexLeg): EncodedDexLeg {
   return {
     dex: "sushi",
     target: leg.target,
+    tokenIn: leg.tokenIn,
+    tokenOut: leg.tokenOut,
     calldata,
     value: "0",
     debug: {

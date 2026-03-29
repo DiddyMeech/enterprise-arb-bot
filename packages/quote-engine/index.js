@@ -55,9 +55,13 @@ class QuoteEngine {
         if (network.chainId === 42161) chainName = "Arb";
         else if (network.chainId === 8453) chainName = "Base";
 
+        // BUG-2 FIX: config.CHAINS entries use `chainId`, not `id`
         const config = require('@arb/config');
-        const chainConfig = Object.values(config.CHAINS).find(c => c.id === network.chainId) || {};
+        const chainConfig = Object.values(config.CHAINS).find(c => c.chainId === network.chainId) || {};
         const executorAddress = chainConfig.contractAddress || config.ARB_CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000";
+
+        // BUG-3 FIX: use configurable slippage tolerance, never send 0 as minOut
+        const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS || "30"); // default 0.30%
 
         const uniRouter = DEX_ROUTERS.UniswapV3[chainName];
         const sushiRouter = DEX_ROUTERS.SushiSwap[chainName];
@@ -88,13 +92,15 @@ class QuoteEngine {
 
             // Leg 1: Execution Phase (UniswapV3)
             targets.push(uniRouter);
+            // Apply slippage tolerance: minOut = bestQuote * (1 - SLIPPAGE_BPS/10000)
+            const uniMinOut = bestQuote.mul(10000 - SLIPPAGE_BPS).div(10000);
             executePayloads.push(uniIface.encodeFunctionData("exactInputSingle", [{
                 tokenIn,
                 tokenOut,
                 fee: 3000,
                 recipient: executorAddress,
                 amountIn,
-                amountOutMinimum: 0,
+                amountOutMinimum: uniMinOut,
                 sqrtPriceLimitX96: 0
             }]));
 
@@ -106,10 +112,13 @@ class QuoteEngine {
             }
 
             // Leg 2: Execution Phase (SushiSwap) - Sweeps quote dynamically back to origin asset
+            // Apply slippage tolerance: minOut = amountIn * (1 - SLIPPAGE_BPS/10000)
+            // For the return leg we use amountIn as a proxy for expected output
+            const sushiMinOut = amountIn.mul ? amountIn.mul(10000 - SLIPPAGE_BPS).div(10000) : BigInt(0);
             targets.push(sushiRouter);
             executePayloads.push(sushiIface.encodeFunctionData("swapExactTokensForTokens", [
                 bestQuote, 
-                0, 
+                sushiMinOut, 
                 [tokenOut, tokenIn],
                 executorAddress,
                 Math.floor(Date.now() / 1000) + 60 * 20

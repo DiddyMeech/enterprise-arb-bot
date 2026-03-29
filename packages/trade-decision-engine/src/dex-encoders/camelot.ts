@@ -20,6 +20,8 @@ export function encodeCamelotLeg(leg: NormalizedDexLeg): EncodedDexLeg {
   return {
     dex: "camelot",
     target: leg.target,
+    tokenIn: leg.tokenIn,
+    tokenOut: leg.tokenOut,
     calldata,
     value: "0",
     debug: {

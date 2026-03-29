@@ -92,6 +92,8 @@ export type OrchestratorConfig = {
     failureWindowSize: number;
   };
   flashLoanPremiumRefreshMs: number;
+  /** How long (ms) before an open circuit auto-resets. Default: 5 min. */
+  circuitResetMs: number;
 };
 
 export class ChainWorkerQueue {
@@ -173,6 +175,18 @@ export class ArbOrchestrator {
         this.refreshFlashLoanPremiums().catch(() => undefined);
       }, this.cfg.flashLoanPremiumRefreshMs);
     }
+
+    // Auto-reset any tripped circuit breakers after circuitResetMs cooldown
+    const resetMs = this.cfg.circuitResetMs ?? 5 * 60 * 1000;
+    setInterval(() => {
+      const now = this.now();
+      for (const chain of ["arbitrum", "base"] as const) {
+        const state = this.circuit[chain];
+        if (state.open && state.openedAt !== undefined && now - state.openedAt >= resetMs) {
+          this.resetCircuit(chain);
+        }
+      }
+    }, Math.min(resetMs, 60_000)); // check at most every 60s
   }
 
   submitOpportunity(opp: Opportunity) {
@@ -369,7 +383,7 @@ export class ArbOrchestrator {
         failure: classified.failure,
       });
 
-      this.registerFailure(opp.chain, classified.failure);
+      this.registerFailure(opp.chain, classified.failure, "send");
       this.bumpQuarantine(this.routeKey(opp), classified.failure);
       return;
     }
@@ -409,7 +423,7 @@ export class ArbOrchestrator {
         details: { txHash: send.txHash },
       });
 
-      this.registerFailure(opp.chain, classified.failure);
+      this.registerFailure(opp.chain, classified.failure, "receipt");
       this.bumpQuarantine(this.routeKey(opp), classified.failure);
       return;
     }
@@ -467,12 +481,28 @@ export class ArbOrchestrator {
     this.quarantine.set(key, current);
   }
 
-  private registerFailure(chain: ChainName, failure: FailureReason | string) {
+  /**
+   * phase: "send" = tx never left the node (nonce, rpc, gas estimation issues)
+   *         "receipt" = tx mined but reverted on-chain
+   * Only send-phase failures count toward consecutiveSendFailures to avoid
+   * double-tripping the kill switch when a route reverts on-chain.
+   */
+  private registerFailure(
+    chain: ChainName,
+    failure: FailureReason | string,
+    phase: "send" | "receipt" | "other" = "other",
+  ) {
     this.recentFailures[chain].push(true);
     this.trimFailureWindow(chain);
 
-    this.consecutiveSendFailures[chain] += 1;
+    // Only pre-broadcast failures count as send failures
+    if (phase === "send") {
+      this.consecutiveSendFailures[chain] += 1;
+    }
+
+    // On-chain reverts count as revert failures (separate counter)
     if (
+      phase === "receipt" ||
       failure === "REVERTED_OR_IMPOSSIBLE" ||
       failure === "CALLBACK_FAILED" ||
       failure === "ASSET_NOT_RETURNED" ||

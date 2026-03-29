@@ -24,6 +24,8 @@ export function encodeUniV3Leg(leg: NormalizedDexLeg): EncodedDexLeg {
   return {
     dex: "univ3",
     target: leg.target,
+    tokenIn: leg.tokenIn,
+    tokenOut: leg.tokenOut,
     calldata,
     value: "0",
     debug: {

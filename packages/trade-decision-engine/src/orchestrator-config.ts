@@ -20,4 +20,5 @@ export const ORCHESTRATOR_CONFIG: OrchestratorConfig = {
     failureWindowSize: 20,
   },
   flashLoanPremiumRefreshMs: 5 * 60 * 1000,
+  circuitResetMs: 5 * 60 * 1000, // auto-reset tripped circuits after 5 min
 };

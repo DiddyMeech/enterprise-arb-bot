@@ -9,11 +9,22 @@ export { getCodeInfo, extractSelector, safeErrorString, decodeCommonRevert, buil
 export { normalizeRoute, RawRouteLegInput, RawRouteInput } from "./route-normalizer";
 export { encodeDexLeg, SupportedDex, NormalizedDexLeg, EncodedDexLeg } from "./dex-encoders";
 
-// Shim for legacy js callers
+// Shim for legacy js callers — errors are re-thrown so callers get real stack traces
 export const evaluatePipeline = async (opp: any, simulatorCB: any, executionCB: any) => {
     console.warn("[DECISION-ENGINE] Legacy evaluatePipeline called. Migration to new TS orchestrator is pending.");
-    const sim = await simulatorCB(opp);
-    if(sim && sim.passed) {
-        await executionCB(opp, 1000, sim);
+    let sim: any;
+    try {
+        sim = await simulatorCB(opp);
+    } catch (err) {
+        console.error("[DECISION-ENGINE] evaluatePipeline: simulatorCB threw:", err);
+        throw err;
+    }
+    if (sim && sim.passed) {
+        try {
+            await executionCB(opp, 1000, sim);
+        } catch (err) {
+            console.error("[DECISION-ENGINE] evaluatePipeline: executionCB threw:", err);
+            throw err;
+        }
     }
 };

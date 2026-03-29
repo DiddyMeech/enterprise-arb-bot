@@ -72,8 +72,17 @@ export function classifyFailure(input: FailureInput): ClassifiedFailure {
 
   const details: string[] = [];
 
-  if (containsAny(blob, ["insufficient_output_amount", "too little received", "slippage check failed"])) {
-    details.push("Swap output fell below minimum acceptable amount.");
+  if (containsAny(blob, [
+    "insufficient_output_amount",
+    "insufficient output amount",
+    "too little received",
+    "slippage check failed",
+    "execution reverted: k",
+    // Uniswap V2 K-invariant: the bare string is literally 'K'
+    // We match " k" (space-bounded) to avoid false-positives on 'stack', 'block', etc.
+    " k"
+  ])) {
+    details.push("Swap output fell below minimum acceptable amount (includes UniV2 K-invariant).");
     return { failure: "INSUFFICIENT_OUTPUT_AMOUNT", confidence: "high", details };
   }
 

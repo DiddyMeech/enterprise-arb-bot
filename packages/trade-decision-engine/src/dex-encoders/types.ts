@@ -17,6 +17,8 @@ export type NormalizedDexLeg = {
 export type EncodedDexLeg = {
   dex: SupportedDex;
   target: string;
+  tokenIn: string;
+  tokenOut: string;
   calldata: string;
   value: string;
   debug: Record<string, unknown>;
