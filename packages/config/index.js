@@ -47,7 +47,7 @@ const config = {
             name: "Arbitrum",
             contractAddress: process.env.ARB_CONTRACT_ADDRESS,
             pollingInterval: 100, 
-            wss: process.env.ARB_WSS_SCAN, // Upgraded memory stream mapping
+            // wss: process.env.ARB_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
             rpcs: [
                 process.env.ARB_RPC_SCAN,
                 process.env.ARB_RPC_EXEC,
@@ -59,7 +59,7 @@ const config = {
             name: "Base",
             contractAddress: process.env.BASE_CONTRACT_ADDRESS,
             pollingInterval: 200, 
-            wss: process.env.BASE_WSS_SCAN, // Upgraded memory stream mapping
+            // wss: process.env.BASE_WSS_SCAN, // Disabled: Alchemy free tier blocks pending mempool subscriptions
             rpcs: [
                 process.env.BASE_RPC_SCAN,
                 process.env.BASE_RPC_EXEC,

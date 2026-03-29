@@ -48,13 +48,32 @@ class MevBuilder {
                 ]
             });
 
+            // Dynamically evaluate chain target to prevent broadcasting L2 payloads to L1 Flashbots
+            const chainId = (await this.provider.getNetwork()).chainId;
+            let relayEndpoint = config.MEV_RELAYS.FLASHBOTS; // Fallback Mainnet
+            
+            if (chainId === 42161) {
+                relayEndpoint = "https://arbitrum.mempool.bloxroute.cloud";
+            } else if (chainId === 8453) {
+                relayEndpoint = "https://base.mempool.bloxroute.cloud";
+            } else if (chainId === 10) {
+                relayEndpoint = "https://api.optimism.mempool.bloxroute.cloud";
+            }
+
             // Using standard fetch since cross-chain relayers might vary
-            const response = await fetch(config.MEV_RELAYS.FLASHBOTS, {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (relayEndpoint === config.MEV_RELAYS.FLASHBOTS) {
+                headers['X-Flashbots-Signature'] = `${this.wallet.address}:${await this.wallet.signMessage(ethers.utils.id(body))}`;
+            } else if (config.MEV_RELAYS.BLOXROUTE_AUTH) {
+                headers['Authorization'] = config.MEV_RELAYS.BLOXROUTE_AUTH;
+            }
+
+            const response = await fetch(relayEndpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Flashbots-Signature': `${this.wallet.address}:${await this.wallet.signMessage(ethers.utils.id(body))}`
-                },
+                headers,
                 body
             });
 

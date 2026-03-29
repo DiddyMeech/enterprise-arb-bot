@@ -119,19 +119,12 @@ class ScannerApp {
                 
                 const adapters = [
                     new UniswapV3Adapter(ethers.constants.AddressZero, "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6", provider),
-                    new BaseDexAdapter("SushiSwap", ethers.constants.AddressZero, provider)
+                    new BaseDexAdapter("SushiSwap", "0x327Df1E6de05B9A098E56B0868f7b52044458dE7", provider)
                 ];
                 
                 const { targets, executePayloads, bestQuote } = await quoteEngine.getOptimalQuote(o.tokenIn, o.tokenOut, o.amountIn, adapters);
                 
-                // Pre-flight Aave Premium Buffer: Abort simulation instantly if the spread cannot mathematically cover the 0.05% Flashloan fee.
-                if (bestQuote) {
-                    const flashloanFee = o.amountIn.mul(5).div(10000); // 0.05%
-                    // Deduct Aave premium directly against our spread to prevent costly simulation RPC spam
-                    if (bestQuote.lte(flashloanFee)) {
-                         throw new Error("Spread too thin to cover Aave Premium");
-                    }
-                }
+                // Removed faulty Aave Premium Buffer check which compared WETH fee against TokenOut quote amount
 
                 const simParams = ethers.utils.defaultAbiCoder.encode(['address[]', 'bytes[]'], [targets || [], executePayloads || []]);
                 
@@ -154,16 +147,17 @@ class ScannerApp {
 
         const executeLive = async (o, sizeUsd, sim) => {
             try {
-                const config = require('@arb/config');
-                const provider = new ethers.providers.StaticJsonRpcProvider(chain.rpcs && chain.rpcs.length > 0 ? chain.rpcs[0] : config.CHAINS[chain.name.toUpperCase()].rpcs[0]);
-                const wallet = new ethers.Wallet(config.PRIVATE_KEY, provider);
-                const MevBuilder = require('@arb/mev-builder');
-                const builder = new MevBuilder(provider, wallet, config.CHAINS[chain.name.toUpperCase()].contractAddress || config.ARB_CONTRACT_ADDRESS);
+                const executor = require('@arb/executor');
                 
-                const liveTargets = (sim && sim.targets) ? sim.targets : [];
-                const liveExecutePayloads = (sim && sim.executePayloads) ? sim.executePayloads : [];
-                
-                return await builder.buildAndBroadcastBundle(o, liveTargets, liveExecutePayloads);
+                // Route through the secure generalized execution tier allowing GasEngine & SAFE_MODE constraints
+                await executor.submitValidatedTrade({
+                    payload: o,
+                    evaluation: sim
+                });
+
+                return {
+                    execId: refId, status: 'BROADCAST_INITIATED', netProfitUsd: 0, gasPaidUsd: 0, realizedSlippageBps: 0, latencyMs: 0, quoteDriftBps: 0
+                };
             } catch (err) {
                 return {
                     execId: refId, status: 'REVERTED', netProfitUsd: 0, gasPaidUsd: 0, realizedSlippageBps: 0, latencyMs: 0, quoteDriftBps: 0, revertReason: err.message
