@@ -75,9 +75,15 @@ class QuoteEngine {
 
         // Construct 4-Stage Multi-Hop Loop (TokenIn -> TokenOut -> TokenIn)
         if (bestQuote) {
-            // Leg 1: Approve Target 1
-            targets.push(tokenIn);
-            executePayloads.push(erc20Iface.encodeFunctionData("approve", [uniRouter, MAX_UINT256]));
+            // Implement local allowance cache pattern to eliminate redundant approve() gas costs
+            if (!QuoteEngine.allowanceCache) QuoteEngine.allowanceCache = new Set();
+            
+            const cacheKeyUni = `${executorAddress}-${tokenIn}-${uniRouter}`;
+            if (!QuoteEngine.allowanceCache.has(cacheKeyUni)) {
+                targets.push(tokenIn);
+                executePayloads.push(erc20Iface.encodeFunctionData("approve", [uniRouter, MAX_UINT256]));
+                QuoteEngine.allowanceCache.add(cacheKeyUni);
+            }
 
             // Leg 1: Execution Phase (UniswapV3)
             targets.push(uniRouter);
@@ -91,9 +97,12 @@ class QuoteEngine {
                 sqrtPriceLimitX96: 0
             }]));
 
-            // Leg 2: Approve Target 2
-            targets.push(tokenOut);
-            executePayloads.push(erc20Iface.encodeFunctionData("approve", [sushiRouter, MAX_UINT256]));
+            const cacheKeySushi = `${executorAddress}-${tokenOut}-${sushiRouter}`;
+            if (!QuoteEngine.allowanceCache.has(cacheKeySushi)) {
+                targets.push(tokenOut);
+                executePayloads.push(erc20Iface.encodeFunctionData("approve", [sushiRouter, MAX_UINT256]));
+                QuoteEngine.allowanceCache.add(cacheKeySushi);
+            }
 
             // Leg 2: Execution Phase (SushiSwap) - Sweeps quote dynamically back to origin asset
             targets.push(sushiRouter);

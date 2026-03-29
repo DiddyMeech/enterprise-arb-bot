@@ -122,7 +122,17 @@ class ScannerApp {
                     new BaseDexAdapter("SushiSwap", ethers.constants.AddressZero, provider)
                 ];
                 
-                const { targets, executePayloads } = await quoteEngine.getOptimalQuote(o.tokenIn, o.tokenOut, o.amountIn, adapters);
+                const { targets, executePayloads, bestQuote } = await quoteEngine.getOptimalQuote(o.tokenIn, o.tokenOut, o.amountIn, adapters);
+                
+                // Pre-flight Aave Premium Buffer: Abort simulation instantly if the spread cannot mathematically cover the 0.05% Flashloan fee.
+                if (bestQuote) {
+                    const flashloanFee = o.amountIn.mul(5).div(10000); // 0.05%
+                    // Deduct Aave premium directly against our spread to prevent costly simulation RPC spam
+                    if (bestQuote.lte(flashloanFee)) {
+                         throw new Error("Spread too thin to cover Aave Premium");
+                    }
+                }
+
                 const simParams = ethers.utils.defaultAbiCoder.encode(['address[]', 'bytes[]'], [targets || [], executePayloads || []]);
                 
                 await contract.callStatic.requestFlashLoan(
