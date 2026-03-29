@@ -8,7 +8,7 @@ async function main() {
     
     let rpcUrl, poolAddress;
     if (network === 'arbitrum') {
-        rpcUrl = process.env.ARB_RPC_EXEC || "https://arb1.arbitrum.io/rpc";
+        rpcUrl = process.env.ARB_RPC_SCAN || process.env.ARB_RPC_EXEC || "https://arb1.arbitrum.io/rpc";
         poolAddress = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb'; // Aave V3 Arbi
     } else {
         // Fallback explicitly to the User's Premium Alchemy Base endpoint to bypass QuickNode gas/nonce stalls
@@ -52,11 +52,14 @@ async function main() {
     
     console.log("[DEPLOYMENT] Broadcasting Titan Smart Contract binary sequence to EVM...");
     try {
-        // Enforcing Legacy Type-0 Gas Override to shatter the EIP-1559 0.6 ETH bug Native Ethers encounters on Layer-2s
-        const overrides = {
-            gasLimit: 8000000,
-            gasPrice: await provider.getGasPrice()
-        };
+        let overrides = {};
+        if (network !== 'arbitrum') {
+            // Enforcing Legacy Type-0 Gas Override to shatter the EIP-1559 0.6 ETH bug Native Ethers encounters on Layer-2s
+            overrides = {
+                gasLimit: 8000000,
+                gasPrice: await provider.getGasPrice()
+            };
+        }
         const contract = await factory.deploy(poolAddress, wallet.address, overrides);
         console.log(`[DEPLOYMENT] Transaction Broadcasted! Hash: ${contract.deployTransaction.hash}`);
         console.log("[DEPLOYMENT] Waiting for 1 block confirmation...");
