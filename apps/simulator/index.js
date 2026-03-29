@@ -1,13 +1,18 @@
 const { ethers } = require("ethers");
 const config = require("@arb/config");
 const { logger } = require("@arb/telemetry");
-const { evaluateOpportunity, buildExecutionPlan } = require("@arb/trade-decision-engine");
-
-class RouteMemory {
-  // Simple stub for RouteMemory implementation
-  has(id) { return false; }
-  set(id, val) { }
-}
+const {
+  RouteMemory,
+  evaluateOpportunity,
+  buildExecutionPlan,
+  normalizeRoute,
+  encodeDexLeg
+} = require("@arb/trade-decision-engine");
+const {
+  getCodeInfo,
+  decodeCommonRevert,
+  buildSimFailureReport
+} = require("@arb/trade-decision-engine"); // Exposing from index instead of direct file mapping (best practice applied)
 
 class SimulatorApp {
   constructor() {
@@ -53,22 +58,14 @@ class SimulatorApp {
     const chain = this.getChain(opp.chain);
 
     try {
-      if (!opp.routePlan?.legs?.length) {
-        return {
-          ok: false,
-          mode,
-          decodedReason: "ROUTE_ENCODING_INVALID",
-          reason: "ROUTE_ENCODING_INVALID"
-        };
-      }
+      const deadline = Math.floor(Date.now() / 1000) + 30;
 
-      const minOutRaw =
-        opp.routePlan.minOutRaw ||
-        opp.routePlan.expectedAmountOutRaw ||
-        "0";
+      const normalized = normalizeRoute({
+        deadline,
+        legs: opp.routePlan.rawLegs || opp.routePlan.legs // fallback if parser sends raw
+      });
 
-      const deadline =
-        Math.floor(Date.now() / 1000) + 20;
+      const encodedLegs = normalized.map((leg) => encodeDexLeg(leg));
 
       const executionPlan = buildExecutionPlan({
         executorAddress: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
@@ -79,12 +76,22 @@ class SimulatorApp {
           tokenOut: opp.tokenOutAddress || opp.tokenOut,
           amountInRaw: opp.amountInRaw,
           minProfitTokenRaw: opp.minProfitTokenRaw || "0",
-          minOutRaw,
+          minOutRaw: opp.routePlan.minOutRaw || opp.routePlan.expectedAmountOutRaw || "0",
           deadline,
-          legs: opp.routePlan.legs
+          legs: encodedLegs
         },
         gasLimit: 700000
       });
+
+      const codeInfo = await getCodeInfo(provider, executionPlan.target);
+      if (!codeInfo.hasCode) {
+        return {
+          ok: false,
+          mode,
+          decodedReason: "EXECUTOR_NO_CODE",
+          reason: "REVERTED_OR_IMPOSSIBLE"
+        };
+      }
 
       await provider.call({
         to: executionPlan.target,
@@ -96,11 +103,33 @@ class SimulatorApp {
         mode
       };
     } catch (error) {
+      const decodedReason = decodeCommonRevert(error);
+
+      try {
+        const failureReport = buildSimFailureReport({
+          chain: opp.chain,
+          mode,
+          executorTarget: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
+          routeHash: "unknown",
+          calldata: error?.transaction?.data || "0x",
+          legTargets: (opp.routePlan?.rawLegs || opp.routePlan?.legs || []).map((x) => x.router || "unknown"),
+          legPayloads: [],
+          amountInRaw: opp.amountInRaw || "0",
+          minOutRaw: opp.routePlan?.minOutRaw || opp.routePlan?.expectedAmountOutRaw || "0",
+          deadline: Math.floor(Date.now() / 1000) + 30,
+          decodedReason
+        });
+
+        logger.warn("[SIM_DEBUG] exact execution revert", failureReport);
+      } catch (debugErr) {
+        logger.warn("[SIM_DEBUG] failed to build failure report", { error: String(debugErr) });
+      }
+
       return {
         ok: false,
         mode,
         rawError: error,
-        decodedReason: error?.reason || error?.message || "UNKNOWN_REVERT",
+        decodedReason,
         reason: "REVERTED_OR_IMPOSSIBLE"
       };
     }

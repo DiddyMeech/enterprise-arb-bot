@@ -3,7 +3,11 @@ export * from "./execution-engine";
 export { classifyFailure, FailureReason } from "./failure-classifier";
 export { EngineLogger, LogEvent, LogContext } from "./logger";
 export { ORCHESTRATOR_CONFIG } from "./orchestrator-config";
-export { NormalizedRouteLeg, CanonicalRoutePlan, BuiltExecutionPlan, computeRouteHash, buildExecutionPlan } from "./calldata-builder";
+export { CanonicalRoutePlan, BuiltExecutionPlan, computeRouteHash, buildExecutionPlan } from "./calldata-builder";
+export { EXECUTOR_ABI, EXECUTOR_IFACE, encodeExecutorCall, ExecutorMode, getExecutorFunctionName, getSelector } from "./executor-abi";
+export { getCodeInfo, extractSelector, safeErrorString, decodeCommonRevert, buildSimFailureReport } from "./sim-debug";
+export { normalizeRoute, RawRouteLegInput, RawRouteInput } from "./route-normalizer";
+export { encodeDexLeg, SupportedDex, NormalizedDexLeg, EncodedDexLeg } from "./dex-encoders";
 
 // Shim for legacy js callers
 export const evaluatePipeline = async (opp: any, simulatorCB: any, executionCB: any) => {

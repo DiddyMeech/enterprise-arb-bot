@@ -1,15 +1,5 @@
-import { ethers } from "ethers";
-
-export type NormalizedRouteLeg = {
-  target: string;
-  value?: string;
-  calldata: string;
-  dex: string;
-  tokenIn: string;
-  tokenOut: string;
-};
-
-export type ExecutionMode = "wallet" | "flash";
+import { encodeExecutorCall, type ExecutorMode } from "./executor-abi";
+import type { NormalizedDexLeg } from "./dex-encoders";
 
 export type CanonicalRoutePlan = {
   chain: "arbitrum" | "base";
@@ -19,11 +9,18 @@ export type CanonicalRoutePlan = {
   minProfitTokenRaw: string;
   minOutRaw: string;
   deadline: number;
-  legs: NormalizedRouteLeg[];
+  legs: Array<{
+    target: string;
+    value?: string;
+    calldata: string;
+    dex: string;
+    tokenIn: string;
+    tokenOut: string;
+  }>;
 };
 
 export type BuiltExecutionPlan = {
-  mode: ExecutionMode;
+  mode: ExecutorMode;
   target: string;
   calldata: string;
   targets: string[];
@@ -33,97 +30,56 @@ export type BuiltExecutionPlan = {
   routeHash: string;
 };
 
-const EXECUTOR_IFACE = new ethers.utils.Interface([
-  "function executeArbitrage(address tokenIn,uint256 amountIn,uint256 minOut,uint256 deadline,address[] calldata targets,bytes[] calldata payloads)",
-  "function executeFlashArbitrage(address tokenIn,uint256 amountIn,uint256 minOut,uint256 deadline,address[] calldata targets,bytes[] calldata payloads)"
-]);
-
-function assertRoute(route: CanonicalRoutePlan): void {
-  if (!route.legs?.length) {
-    throw new Error("Route has no legs");
-  }
-  if (!route.tokenIn || !route.amountInRaw || !route.minOutRaw) {
-    throw new Error("Route missing required execution fields");
-  }
-  for (const [i, leg] of route.legs.entries()) {
-    if (!leg.target || !leg.calldata) {
-      throw new Error(`Route leg ${i} is incomplete`);
-    }
-  }
-}
-
 export function computeRouteHash(route: CanonicalRoutePlan): string {
-  return ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(
-      [
-        "string",
-        "address",
-        "address",
-        "uint256",
-        "uint256",
-        "uint256",
-        "tuple(address target,uint256 value,bytes calldata,string dex,address tokenIn,address tokenOut)[]"
-      ],
-      [
-        route.chain,
-        route.tokenIn,
-        route.tokenOut,
-        route.amountInRaw,
-        route.minOutRaw,
-        route.deadline,
-        route.legs.map((leg) => ({
-          target: leg.target,
-          value: leg.value ?? "0",
-          calldata: leg.calldata,
-          dex: leg.dex,
-          tokenIn: leg.tokenIn,
-          tokenOut: leg.tokenOut
-        }))
-      ]
-    )
-  );
+  return JSON.stringify({
+    chain: route.chain,
+    tokenIn: route.tokenIn,
+    tokenOut: route.tokenOut,
+    amountInRaw: route.amountInRaw,
+    minOutRaw: route.minOutRaw,
+    deadline: route.deadline,
+    legs: route.legs.map((x) => ({
+      target: x.target,
+      dex: x.dex,
+      tokenIn: x.tokenIn,
+      tokenOut: x.tokenOut,
+      calldata: x.calldata
+    }))
+  });
 }
 
 export function buildExecutionPlan(input: {
   executorAddress: string;
-  mode: ExecutionMode;
+  mode: ExecutorMode;
   route: CanonicalRoutePlan;
   gasLimit?: number;
 }): BuiltExecutionPlan {
-  const { executorAddress, mode, route } = input;
-  assertRoute(route);
+  if (!input.route.legs?.length) {
+    throw new Error("Route has no encoded legs");
+  }
 
-  const targets = route.legs.map((x) => x.target);
-  const payloads = route.legs.map((x) => x.calldata);
-  const values = route.legs.map((x) => x.value ?? "0");
+  const targets = input.route.legs.map((x) => x.target);
+  const payloads = input.route.legs.map((x) => x.calldata);
+  const values = input.route.legs.map((x) => x.value ?? "0");
 
-  const calldata =
-    mode === "flash"
-      ? EXECUTOR_IFACE.encodeFunctionData("executeFlashArbitrage", [
-          route.tokenIn,
-          route.amountInRaw,
-          route.minOutRaw,
-          route.deadline,
-          targets,
-          payloads
-        ])
-      : EXECUTOR_IFACE.encodeFunctionData("executeArbitrage", [
-          route.tokenIn,
-          route.amountInRaw,
-          route.minOutRaw,
-          route.deadline,
-          targets,
-          payloads
-        ]);
+  const calldata = encodeExecutorCall({
+    mode: input.mode,
+    tokenIn: input.route.tokenIn,
+    amountInRaw: input.route.amountInRaw,
+    minOutRaw: input.route.minOutRaw,
+    deadline: input.route.deadline,
+    targets,
+    payloads
+  });
 
   return {
-    mode,
-    target: executorAddress,
+    mode: input.mode,
+    target: input.executorAddress,
     calldata,
     targets,
     payloads,
     values,
     gasLimit: input.gasLimit ?? 700000,
-    routeHash: computeRouteHash(route)
+    routeHash: computeRouteHash(input.route)
   };
 }
