@@ -97,10 +97,10 @@ You must reply STRICTLY with a valid JSON object matching this schema and absolu
 
             let nextLimit = aiDirective.recommended_min_profit_usd;
             
-            // USER OVERRIDE: Mathematically constrain the AI from exceeding 20 USD limits to target high-frequency daily payouts.
-            if (nextLimit && nextLimit > 20) {
-                logger.warn(`[OVERSEER] AI generated $${nextLimit} limit blocked. Enforcing User Max Threshold: $20.`);
-                nextLimit = 20;
+            // USER OVERRIDE: Mathematically constrain the AI from exceeding 5 USD limits to target high-frequency daily payouts.
+            if (nextLimit && nextLimit > 5) {
+                logger.warn(`[OVERSEER] AI generated $${nextLimit} limit blocked. Enforcing User Max Threshold: $5.`);
+                nextLimit = 5;
             }
 
             if (nextLimit && nextLimit != currentMinProfit) {
