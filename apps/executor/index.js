@@ -25,7 +25,7 @@ class ExecutorApp {
         const wallet = new ethers.Wallet(config.PRIVATE_KEY, rpcs[0]);
         
         // Instantiate Internal Network Adapters mapping statically to the deployed EVM flashloan core
-        const txRouter = new TxRouter(config.ARB_CONTRACT_ADDRESS, rpcs[0], wallet);
+        const txRouter = new TxRouter(chain.contractAddress || config.ARB_CONTRACT_ADDRESS, rpcs[0], wallet);
         const mevRelay = chain.mevRelay ? new MevRelay([chain.mevRelay]) : null;
 
         // Apply strict dynamic gas strategy

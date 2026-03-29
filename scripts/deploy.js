@@ -12,7 +12,7 @@ async function main() {
         poolAddress = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb'; // Aave V3 Arbi
     } else if (network === 'op') {
         rpcUrl = process.env.OP_RPC_SCAN || process.env.OP_RPC_EXEC || "https://optimism-mainnet.infura.io/v3/55507f44b8f845dca9864ee984d27616";
-        poolAddress = '0x794a61358D6845594F94dc1DB02A252b5b4814aD'; // Aave V3 OP    
+        poolAddress = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb'; // Aave V3 OP PoolAddressesProvider    
     } else {
         // Fallback explicitly to the User's Premium Alchemy Base endpoint to bypass QuickNode gas/nonce stalls
         rpcUrl = "https://base-mainnet.g.alchemy.com/v2/pSLmhjyc-4LdT-bUrSr3m0Ks5lBCF_sr"; 
@@ -75,10 +75,14 @@ async function main() {
         const envPath = path.resolve(__dirname, '../.env');
         let envData = fs.readFileSync(envPath, 'utf8');
         
-        if (envData.includes('ARB_CONTRACT_ADDRESS=')) {
-            envData = envData.replace(/ARB_CONTRACT_ADDRESS=.*/g, `ARB_CONTRACT_ADDRESS=${contract.address}`);
+        let envVar = 'BASE_CONTRACT_ADDRESS';
+        if (network === 'arbitrum') envVar = 'ARB_CONTRACT_ADDRESS';
+        if (network === 'op') envVar = 'OP_CONTRACT_ADDRESS';
+
+        if (envData.includes(`${envVar}=`)) {
+            envData = envData.replace(new RegExp(`${envVar}=.*`, 'g'), `${envVar}=${contract.address}`);
         } else {
-            envData += `\n# ⛓️ PHYSICAL AAVE ROUTER\nARB_CONTRACT_ADDRESS=${contract.address}\n`;
+            envData += `\n# ⛓️ PHYSICAL AAVE ROUTER\n${envVar}=${contract.address}\n`;
         }
         fs.writeFileSync(envPath, envData, 'utf8');
         

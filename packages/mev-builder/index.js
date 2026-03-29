@@ -3,10 +3,10 @@ const config = require('@arb/config');
 const TxRouter = require('@arb/tx-router');
 
 class MevBuilder {
-    constructor(provider, wallet) {
+    constructor(provider, wallet, contractAddress) {
         this.provider = provider;
         this.wallet = wallet;
-        this.txRouter = new TxRouter(config.ARB_CONTRACT_ADDRESS, this.provider, this.wallet);
+        this.txRouter = new TxRouter(contractAddress || config.ARB_CONTRACT_ADDRESS, this.provider, this.wallet);
     }
 
     async buildAndBroadcastBundle(payload, targets, executePayloads) {

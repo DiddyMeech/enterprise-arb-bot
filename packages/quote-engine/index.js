@@ -56,7 +56,8 @@ class QuoteEngine {
         else if (network.chainId === 8453) chainName = "Base";
 
         const config = require('@arb/config');
-        const executorAddress = config.ARB_CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000";
+        const chainConfig = Object.values(config.CHAINS).find(c => c.id === network.chainId) || {};
+        const executorAddress = chainConfig.contractAddress || config.ARB_CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000";
 
         const uniRouter = DEX_ROUTERS.UniswapV3[chainName];
         const sushiRouter = DEX_ROUTERS.SushiSwap[chainName];

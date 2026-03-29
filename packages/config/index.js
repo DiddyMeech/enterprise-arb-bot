@@ -45,6 +45,7 @@ const config = {
         ARBITRUM: {
             id: 42161,
             name: "Arbitrum",
+            contractAddress: process.env.ARB_CONTRACT_ADDRESS,
             pollingInterval: 100, 
             wss: process.env.ARB_WSS_SCAN, // Upgraded memory stream mapping
             rpcs: [
@@ -56,6 +57,7 @@ const config = {
         BASE: {
             id: 8453,
             name: "Base",
+            contractAddress: process.env.BASE_CONTRACT_ADDRESS,
             pollingInterval: 200, 
             wss: process.env.BASE_WSS_SCAN, // Upgraded memory stream mapping
             rpcs: [
@@ -67,6 +69,7 @@ const config = {
         OP: {
             id: 10,
             name: "Optimism",
+            contractAddress: process.env.OP_CONTRACT_ADDRESS,
             pollingInterval: 100, 
             wss: process.env.OP_WSS_SCAN, 
             rpcs: [

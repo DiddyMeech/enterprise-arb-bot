@@ -111,7 +111,7 @@ class ScannerApp {
                 const config = require('@arb/config');
                 const provider = new ethers.providers.StaticJsonRpcProvider(chain.rpcs && chain.rpcs.length > 0 ? chain.rpcs[0] : config.CHAINS[chain.name.toUpperCase()].rpcs[0]);
                 const abi = ["function requestFlashLoan(address asset, uint256 amount, bytes calldata params) external"];
-                const contract = new ethers.Contract(config.ARB_CONTRACT_ADDRESS, abi, provider);
+                const contract = new ethers.Contract(config.CHAINS[chain.name.toUpperCase()].contractAddress || config.ARB_CONTRACT_ADDRESS, abi, provider);
                 
                 const { UniswapV3Adapter, BaseDexAdapter } = require('@arb/dex-adapters');
                 const QuoteEngine = require('@arb/quote-engine');
@@ -158,7 +158,7 @@ class ScannerApp {
                 const provider = new ethers.providers.StaticJsonRpcProvider(chain.rpcs && chain.rpcs.length > 0 ? chain.rpcs[0] : config.CHAINS[chain.name.toUpperCase()].rpcs[0]);
                 const wallet = new ethers.Wallet(config.PRIVATE_KEY, provider);
                 const MevBuilder = require('@arb/mev-builder');
-                const builder = new MevBuilder(provider, wallet);
+                const builder = new MevBuilder(provider, wallet, config.CHAINS[chain.name.toUpperCase()].contractAddress || config.ARB_CONTRACT_ADDRESS);
                 
                 const liveTargets = (sim && sim.targets) ? sim.targets : [];
                 const liveExecutePayloads = (sim && sim.executePayloads) ? sim.executePayloads : [];
