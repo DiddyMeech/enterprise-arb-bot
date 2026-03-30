@@ -4,9 +4,9 @@
 const { spawn } = require("child_process");
 const path = require("path");
 
-const refreshMs = Number(process.env.RPC_REFRESH_INTERVAL_MS || 10 * 60 * 1000);
+const refreshMs = Number(process.env.RPC_REFRESH_INTERVAL_MS || 600000);
 
-function runNode(script) {
+function run(script) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script], { stdio: "inherit" });
     child.on("exit", (code) => resolve(code ?? 1));
@@ -14,13 +14,11 @@ function runNode(script) {
 }
 
 async function cycle() {
-  const harvest = path.resolve(process.cwd(), "scripts/rpc/harvest-rpc-pool.js");
+  const harvest = path.resolve(process.cwd(), "scripts/rpc/harvest-rpc-pool-v2.js");
   const alert = path.resolve(process.cwd(), "scripts/rpc/rpc-alert.js");
-
-  const code = await runNode(harvest);
-  await runNode(alert);
-
-  console.log(`[rpc-health-daemon] cycle complete with code=${code}`);
+  const harvestCode = await run(harvest);
+  await run(alert);
+  console.log(`[rpc-health-daemon] cycle complete harvestCode=${harvestCode}`);
 }
 
 async function main() {
