@@ -27,11 +27,19 @@ const SUSHI_ROUTER_BASE = '0x327Df1E6de05B9A098E56B0868f7b52044458dE7';
 const UNIV3_QUOTER_ARB  = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6'; // QuoterV1
 const UNIV3_POOL_FEE    = 500; // 0.05%
 
-const POLL_INTERVAL_MS           = 3000;   // poll every 3 seconds
-const DIVERGENCE_THRESHOLD_BPS   = 30;     // emit if >= 30 bps (0.30%) divergence — filters noise
-const PROBE_AMOUNT_USDC          = '10000000'; // 10 USDC (6 decimals) probe quote
-const TRADE_USD_HINT             = 1000;   // $1000 hint: 30 bps * $1000 = $3 gross > $1.80 gas
-const ETH_PRICE_USD_HINT         = 2200;
+// ── Filter config (advisor recommendations) ─────────────────────────
+// CHAINS: Arbitrum ONLY. Base disabled (checksum errors, not trading there yet).
+const ACTIVE_CHAINS = ['arbitrum'];
+
+const POLL_INTERVAL_MS         = 3000;    // poll every 3 seconds
+const DIVERGENCE_THRESHOLD_BPS = 100;    // skip LOW_DIVERGENCE if < 100 bps
+const MIN_GROSS_PROFIT_USD     = 0.50;   // skip LOW_GROSS_PROFIT if < $0.50
+const MIN_NET_PROFIT_USD       = 0.25;   // skip LOW_NET_PROFIT if net < $0.25
+const MAX_GAS_TO_GROSS_RATIO   = 0.50;   // skip GAS_DOMINATES if gas > 50% of gross
+const PROBE_AMOUNT_USDC        = '10000000'; // 10 USDC probe
+const TRADE_USD_HINT           = 1000;   // $1000 eval size
+const ETH_PRICE_USD_HINT       = 2200;
+const GAS_UNITS_APPROX         = 200_000; // 2-leg arb estimate
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const SUSHI_IFACE = new ethers.utils.Interface([
@@ -230,17 +238,38 @@ class PricePoller {
       const maxOut = sushiWethOut > univ3WethOut ? sushiWethOut : univ3WethOut;
       const divBps = Number((diff * 10000n) / maxOut);
 
-      if (divBps < DIVERGENCE_THRESHOLD_BPS) return;
+      if (divBps < DIVERGENCE_THRESHOLD_BPS) {
+        // Silent skip — too common to log
+        return;
+      }
 
-      // $1000 * divBps/10000 gross profit; reject if doesn't cover gas
+      // Gas estimate for profit checks
+      const gasEth = (GAS_UNITS_APPROX * 0.00000002); // 0.020 gwei
+      const gasUsd = gasEth * ETH_PRICE_USD_HINT;
+
+      // Gross profit at TRADE_USD_HINT size
       const grossProfit = TRADE_USD_HINT * (divBps / 10000);
-      const gasUsd = 1.8;
-      if (grossProfit <= gasUsd) return; // net negative — skip
+      const netProfit   = grossProfit - gasUsd;
+
+      // ── Structured pre-filters ──
+      if (grossProfit < MIN_GROSS_PROFIT_USD) {
+        console.log(`[SCANNER] SKIP LOW_GROSS_PROFIT | ${this.chain} | divBps=${divBps} | gross=$${grossProfit.toFixed(3)}`);
+        return;
+      }
+      if (netProfit < MIN_NET_PROFIT_USD) {
+        console.log(`[SCANNER] SKIP LOW_NET_PROFIT | ${this.chain} | net=$${netProfit.toFixed(3)} threshold=$${MIN_NET_PROFIT_USD}`);
+        return;
+      }
+      if (gasUsd > grossProfit * MAX_GAS_TO_GROSS_RATIO) {
+        console.log(`[SCANNER] SKIP GAS_DOMINATES_PROFIT | ${this.chain} | gas=$${gasUsd.toFixed(3)} gross=$${grossProfit.toFixed(3)}`);
+        return;
+      }
 
       const dedupeKey = `${this.chain}:${tokenIn}:${tokenOut}:${Math.floor(divBps / 5)}`;
       if (isDuplicate(dedupeKey)) return;
 
-      console.log(`[SCANNER] [PRICE-DIV] ${this.chain} | USDC/WETH | divergence: ${divBps} bps | gross=$${grossProfit.toFixed(2)} | buyOnSushi=${buyOnSushi}`);
+      const buyOnSushi = univ3WethOut > sushiWethOut;
+      console.log(`[SCANNER] [PRICE-DIV] ${this.chain} | USDC/WETH | divergence: ${divBps} bps | gross=$${grossProfit.toFixed(2)} net=$${netProfit.toFixed(2)} | buyOn=${buyOnSushi ? 'sushi' : 'univ3'}`);
 
       const opp = {
         id: randomUUID(),
@@ -283,7 +312,11 @@ class ScannerApp {
     getOrchestrator().catch(err => console.error('[SCANNER] Orchestrator init error:', err.message));
 
     for (const chain of Object.values(this.chains)) {
-      if (chain.name === 'optimism') continue;
+      // Only active chains — Base disabled until checksum + profitability confirmed
+      if (!ACTIVE_CHAINS.includes(chain.name)) {
+        console.log(`[SCANNER] Skipping ${chain.name} (not in ACTIVE_CHAINS)`);
+        continue;
+      }
 
       // Heartbeat block poller
       if (chain.pollingInterval) this.startPolling(chain);
