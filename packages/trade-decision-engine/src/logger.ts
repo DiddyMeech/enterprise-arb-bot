@@ -9,6 +9,8 @@ export type LogEvent =
   | "SCANNER_HEARTBEAT"
   | "OPPORTUNITY_DETECTED"
   | "PREFILTER_REJECT"
+  | "PREFILTER_SKIP"
+  | "PREFILTER_PASS"
   | "QUOTE_OK"
   | "QUOTE_FAIL"
   | "NET_FAIL"

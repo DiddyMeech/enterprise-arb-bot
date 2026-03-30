@@ -1,5 +1,8 @@
 // engine-orchestrator.ts
 
+import { prefilterOpportunity } from './opportunity-prefilter';
+import { logSkip } from './log-skip';
+
 import {
   Opportunity,
   EvaluationResult,
@@ -190,6 +193,43 @@ export class ArbOrchestrator {
   }
 
   submitOpportunity(opp: Opportunity) {
+    // Run structured prefilter before queuing — rejects junk before simulation
+    const pf = prefilterOpportunity({
+      id: opp.id,
+      chain: opp.chain,
+      tokenIn: opp.tokenIn,
+      tokenOut: opp.tokenOut,
+      dexBuy: opp.dexBuy,
+      dexSell: opp.dexSell,
+      estimatedPriceImpactBps: opp.estimatedPriceImpactBps,
+      quotedGrossProfitUsd: opp.quotedGrossProfitUsd,
+      estimatedGasUsd: opp.estimatedGasUsd,
+      minObservedPoolLiquidityUsd: opp.minObservedPoolLiquidityUsd,
+      minObserved24hVolumeUsd: opp.minObserved24hVolumeUsd,
+      quoteTimestampMs: opp.quoteTimestampMs,
+      nowMs: this.now(),
+    });
+
+    if (!pf.ok) {
+      logSkip(this.logger, {
+        reason: pf.reason,
+        opportunityId: opp.id,
+        chain: opp.chain,
+        tokenIn: opp.tokenIn,
+        tokenOut: opp.tokenOut,
+        dexBuy: opp.dexBuy,
+        dexSell: opp.dexSell,
+        details: pf.details,
+      });
+      return;
+    }
+
+    this.logger.info('PREFILTER_PASS', {
+      opportunityId: opp.id,
+      chain: opp.chain,
+      score: pf.score,
+    });
+
     this.queues[opp.chain].push(async () => {
       await this.handleOpportunity(opp);
     });
