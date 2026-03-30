@@ -4,7 +4,7 @@ require('@nomicfoundation/hardhat-toolbox');
 const arbitrumRpc =
   (process.env.ARBITRUM_SEND_RPC_URLS || '').split(',').map(v => v.trim()).filter(Boolean)[0] ||
   process.env.ARBITRUM_RPC_URL ||
-  '';
+  'https://arb1.arbitrum.io/rpc';
 
 module.exports = {
   solidity: {
