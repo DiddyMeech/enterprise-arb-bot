@@ -1,7 +1,9 @@
+'use strict';
 const { ethers } = require('ethers');
-const { getChain, getToken } = require('../../config/chains');
+const { getChain, getToken, getDex } = require('../../config/chains');
 const { THRESHOLDS } = require('../../config/thresholds');
 const { SushiAdapter } = require('../dex-adapters/sushi');
+const { QuickSwapAdapter } = require('../dex-adapters/quickswap');
 const { UniV3Adapter } = require('../dex-adapters/univ3');
 
 function bn(v) {
@@ -16,22 +18,35 @@ function formatUnitsSafe(raw, decimals) {
   return Number(ethers.utils.formatUnits(raw, decimals));
 }
 
-function estimateGasUsd({
-  gasPriceWei,
-  gasUnits = THRESHOLDS.gasUnitsApprox,
-  nativeTokenUsd
-}) {
-  const gasCostEth = Number(
-    ethers.utils.formatEther(bn(gasPriceWei).mul(gasUnits))
-  );
+function estimateGasUsd({ gasPriceWei, gasUnits = THRESHOLDS.gasUnitsApprox, nativeTokenUsd }) {
+  const gasCostEth = Number(ethers.utils.formatEther(bn(gasPriceWei).mul(gasUnits)));
   return gasCostEth * Number(nativeTokenUsd);
 }
 
 function makeAdapters(chainKey, provider) {
-  const adapters = [new SushiAdapter({ chainKey, provider })];
+  const chain = getChain(chainKey);
+  const adapters = [];
 
+  // Sushi V2 (always)
+  try {
+    adapters.push(new SushiAdapter({ chainKey, provider }));
+  } catch {}
+
+  // QuickSwap V2 (if configured)
+  try {
+    getDex(chainKey, 'quickswap');
+    adapters.push(new QuickSwapAdapter({ chainKey, provider }));
+  } catch {}
+
+  // Uniswap V3 500 fee (if enabled)
   if (String(process.env.ENABLE_UNIV3 || 'true').toLowerCase() === 'true') {
-    adapters.push(new UniV3Adapter({ chainKey, provider }));
+    try {
+      adapters.push(new UniV3Adapter({ chainKey, provider, feeTier: 500 }));
+    } catch {}
+    // Also probe 3000 fee tier separately
+    try {
+      adapters.push(new UniV3Adapter({ chainKey, provider, feeTier: 3000 }));
+    } catch {}
   }
 
   return adapters;
@@ -44,27 +59,28 @@ async function getGasPriceWei(provider) {
   throw new Error('NO_GAS_PRICE');
 }
 
+// Build candidate pairs from available token symbols
+function buildPairs(chainKey) {
+  const chain = getChain(chainKey);
+  const symbols = Object.keys(chain.tokens);
+  const wanted = [
+    ['USDC', 'WETH'],
+    ['USDC', 'WMATIC'],
+    ['WETH', 'WMATIC'],
+    ['USDC_BRIDGED', 'WETH'],
+    ['USDC_BRIDGED', 'WMATIC'],
+  ];
+  return wanted.filter(([a, b]) => chain.tokens[a] && chain.tokens[b]);
+}
+
 async function buildTwoLegRoutes({
   chainKey,
   provider,
-  tokenInSymbol = 'USDC',
-  tokenOutSymbol = 'WETH',
+  tokenInSymbol,
+  tokenOutSymbol,
   amountInUsd,
   nativeTokenUsd
 }) {
-  const chain = getChain(chainKey);
-  const tokenIn = getToken(chainKey, tokenInSymbol);
-  const tokenOut = getToken(chainKey, tokenOutSymbol);
-
-  if (tokenIn.symbol !== 'USDC') {
-    throw new Error('Current builder expects tokenInSymbol=USDC');
-  }
-
-  const amountInRaw = ethers.utils.parseUnits(
-    String(amountInUsd),
-    tokenIn.decimals
-  );
-
   const gasPriceWei = await getGasPriceWei(provider);
   const gasUsd = estimateGasUsd({
     gasPriceWei,
@@ -72,91 +88,108 @@ async function buildTwoLegRoutes({
     nativeTokenUsd
   });
 
+  const chain = getChain(chainKey);
   const adapters = makeAdapters(chainKey, provider);
   const candidates = [];
 
-  for (const buyAdapter of adapters) {
-    let leg1;
+  // Determine which pairs to scan
+  const pairsToScan = tokenInSymbol && tokenOutSymbol
+    ? [[tokenInSymbol, tokenOutSymbol]]
+    : buildPairs(chainKey);
+
+  const sizesToProbe = amountInUsd
+    ? [amountInUsd]
+    : [5, 10, 25];
+
+  for (const [inSym, outSym] of pairsToScan) {
+    let tokenIn, tokenOut;
     try {
-      leg1 = await buyAdapter.quoteExactIn({
-        tokenIn: tokenIn.address,
-        tokenOut: tokenOut.address,
-        amountInRaw
-      });
+      tokenIn = getToken(chainKey, inSym);
+      tokenOut = getToken(chainKey, outSym);
     } catch {
       continue;
     }
 
-    for (const sellAdapter of adapters) {
-      let leg2;
-      try {
-        leg2 = await sellAdapter.quoteExactIn({
-          tokenIn: tokenOut.address,
-          tokenOut: tokenIn.address,
-          amountInRaw: leg1.amountOutRaw
-        });
-      } catch {
-        continue;
-      }
+    for (const usdSize of sizesToProbe) {
+      const amountInRaw = ethers.utils.parseUnits(String(usdSize), tokenIn.decimals);
 
-      const grossProfitTokenRaw = bn(leg2.amountOutRaw).sub(amountInRaw);
-      const grossProfitUsd = formatUnitsSafe(
-        grossProfitTokenRaw,
-        tokenIn.decimals
-      );
+      for (const buyAdapter of adapters) {
+        let leg1;
+        try {
+          leg1 = await buyAdapter.quoteExactIn({
+            tokenIn: tokenIn.address,
+            tokenOut: tokenOut.address,
+            amountInRaw
+          });
+        } catch {
+          continue;
+        }
 
-      const dexFeesUsd =
-        Number(amountInUsd) * ((buyAdapter.feeBps + sellAdapter.feeBps) / 10000);
+        for (const sellAdapter of adapters) {
+          if (buyAdapter.name === sellAdapter.name &&
+              buyAdapter.fee === sellAdapter.fee) continue;
 
-      const netProfitUsd = grossProfitUsd - dexFeesUsd - gasUsd;
-
-      const leg1MinOutRaw = applySlippage(leg1.amountOutRaw).toString();
-      const leg2MinOutRaw = applySlippage(leg2.amountOutRaw).toString();
-
-      candidates.push({
-        chain: chain.key,
-        tokenIn: tokenIn.address,
-        tokenOut: tokenOut.address,
-        tokenInSymbol: tokenIn.symbol,
-        tokenOutSymbol: tokenOut.symbol,
-        amountInRaw: amountInRaw.toString(),
-        expectedAmountOutRaw: leg2.amountOutRaw,
-        grossProfitTokenRaw: grossProfitTokenRaw.toString(),
-        grossProfitUsd,
-        gasUsd,
-        dexFeesUsd,
-        netProfitUsd,
-        gasPriceWei: String(gasPriceWei),
-        deadline:
-          Math.floor(Date.now() / 1000) + THRESHOLDS.routeDeadlineSeconds,
-        minProfitTokenRaw: '1',
-        legs: [
-          {
-            dex: leg1.dex,
-            kind: leg1.kind,
-            router: leg1.router,
-            tokenIn: leg1.tokenIn,
-            tokenOut: leg1.tokenOut,
-            amountInRaw: leg1.amountInRaw,
-            expectedOutRaw: leg1.amountOutRaw,
-            minOutRaw: leg1MinOutRaw,
-            feeBps: leg1.feeBps,
-            fee: leg1.fee || 0
-          },
-          {
-            dex: leg2.dex,
-            kind: leg2.kind,
-            router: leg2.router,
-            tokenIn: leg2.tokenIn,
-            tokenOut: leg2.tokenOut,
-            amountInRaw: leg2.amountInRaw,
-            expectedOutRaw: leg2.amountOutRaw,
-            minOutRaw: leg2MinOutRaw,
-            feeBps: leg2.feeBps,
-            fee: leg2.fee || 0
+          let leg2;
+          try {
+            leg2 = await sellAdapter.quoteExactIn({
+              tokenIn: tokenOut.address,
+              tokenOut: tokenIn.address,
+              amountInRaw: leg1.amountOutRaw
+            });
+          } catch {
+            continue;
           }
-        ]
-      });
+
+          const grossProfitTokenRaw = bn(leg2.amountOutRaw).sub(amountInRaw);
+          const grossProfitUsd = formatUnitsSafe(grossProfitTokenRaw, tokenIn.decimals);
+          const dexFeesUsd = usdSize * ((buyAdapter.feeBps + sellAdapter.feeBps) / 10000);
+          const netProfitUsd = grossProfitUsd - dexFeesUsd - gasUsd;
+
+          candidates.push({
+            chain: chain.key,
+            tokenIn: tokenIn.address,
+            tokenOut: tokenOut.address,
+            tokenInSymbol: tokenIn.symbol,
+            tokenOutSymbol: tokenOut.symbol,
+            amountInRaw: amountInRaw.toString(),
+            expectedAmountOutRaw: leg2.amountOutRaw,
+            grossProfitTokenRaw: grossProfitTokenRaw.toString(),
+            grossProfitUsd,
+            gasUsd,
+            dexFeesUsd,
+            netProfitUsd,
+            gasPriceWei: String(gasPriceWei),
+            deadline: Math.floor(Date.now() / 1000) + THRESHOLDS.routeDeadlineSeconds,
+            minProfitTokenRaw: '1',
+            legs: [
+              {
+                dex: leg1.dex,
+                kind: leg1.kind,
+                router: leg1.router,
+                tokenIn: leg1.tokenIn,
+                tokenOut: leg1.tokenOut,
+                amountInRaw: leg1.amountInRaw,
+                expectedOutRaw: leg1.amountOutRaw,
+                minOutRaw: applySlippage(leg1.amountOutRaw).toString(),
+                feeBps: leg1.feeBps,
+                fee: leg1.fee || 0
+              },
+              {
+                dex: leg2.dex,
+                kind: leg2.kind,
+                router: leg2.router,
+                tokenIn: leg2.tokenIn,
+                tokenOut: leg2.tokenOut,
+                amountInRaw: leg2.amountInRaw,
+                expectedOutRaw: leg2.amountOutRaw,
+                minOutRaw: applySlippage(leg2.amountOutRaw).toString(),
+                feeBps: leg2.feeBps,
+                fee: leg2.fee || 0
+              }
+            ]
+          });
+        }
+      }
     }
   }
 

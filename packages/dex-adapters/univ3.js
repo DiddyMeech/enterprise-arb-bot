@@ -1,3 +1,4 @@
+'use strict';
 const { ethers } = require('ethers');
 const { getDex } = require('../../config/chains');
 
@@ -7,10 +8,12 @@ const UNIV3_QUOTER_IFACE = new ethers.utils.Interface([
 ]);
 
 class UniV3Adapter {
-  constructor({ chainKey, provider }) {
+  // feeTier can be passed to override the default (500) so you can probe 3000 separately
+  constructor({ chainKey, provider, feeTier }) {
     this.chainKey = chainKey;
     this.provider = provider;
     this.dex = getDex(chainKey, 'univ3');
+    this._feeTier = feeTier || this.dex.fee;
 
     this.contract = new ethers.Contract(
       this.dex.quoter,
@@ -19,32 +22,18 @@ class UniV3Adapter {
     );
   }
 
-  get name() {
-    return 'univ3';
-  }
-
-  get feeBps() {
-    return this.dex.feeBps;
-  }
-
-  get router() {
-    return this.dex.router;
-  }
-
-  get kind() {
-    return this.dex.kind;
-  }
-
-  get fee() {
-    return this.dex.fee;
-  }
+  get name() { return `univ3_${this._feeTier}`; }
+  get feeBps() { return Math.round(this._feeTier / 100); }
+  get router() { return this.dex.router; }
+  get kind() { return this.dex.kind; }
+  get fee() { return this._feeTier; }
 
   async quoteExactIn({ tokenIn, tokenOut, amountInRaw }) {
     const [amountOut] = await this.contract.callStatic.quoteExactInputSingle({
       tokenIn,
       tokenOut,
       amountIn: amountInRaw,
-      fee: this.fee,
+      fee: this._feeTier,
       sqrtPriceLimitX96: 0
     });
 
@@ -52,7 +41,7 @@ class UniV3Adapter {
       dex: this.name,
       kind: this.kind,
       router: this.router,
-      fee: this.fee,
+      fee: this._feeTier,
       tokenIn,
       tokenOut,
       amountInRaw: ethers.BigNumber.from(amountInRaw).toString(),
@@ -62,6 +51,4 @@ class UniV3Adapter {
   }
 }
 
-module.exports = {
-  UniV3Adapter
-};
+module.exports = { UniV3Adapter };
