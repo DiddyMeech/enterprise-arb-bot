@@ -24,15 +24,18 @@ const config = require('@arb/config');
 // ── Constants ────────────────────────────────────────────────────────────────
 const USDC         = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'; // Native USDC
 const WETH         = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1';
-const SUSHI        = '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506';
+const SUSHI        = '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506'; // 0.30% fee
+const CAMELOT      = '0xc873fEcbd354f5A56E00E710B90EF4201db2448d'; // 0.25% volatile fee
 const UNIV3_QUOTER = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6'; // QuoterV1
 const UNIV3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564'; // SwapRouter
 const POOL_FEE     = 500; // 0.05%
 const CHAIN_ID     = 42161;
 
-const ETH_USD_HINT      = 2200;     // rough ETH price for gas calc
-const GAS_UNITS_APPROX  = 200_000;  // ~2-leg cross-DEX arb
-const MIN_NET_PROFIT_USD = 1.00;    // skip if net < $1
+const VENUE_FEES = { sushi: 0.30, camelot: 0.25, univ3: 0.05 }; // % per leg
+
+const ETH_USD_HINT      = 2200;
+const GAS_UNITS_APPROX  = 200_000;
+const MIN_NET_PROFIT_USD = 1.00;
 
 const amountUSDC  = process.argv[2] ? parseFloat(process.argv[2]) : 5;
 const amountInRaw = ethers.utils.parseUnits(String(amountUSDC), 6);
@@ -143,6 +146,7 @@ async function main() {
   const provider = new ethers.providers.JsonRpcProvider(arbCfg.rpcs[0], { chainId: CHAIN_ID, name: 'arbitrum' });
   const wallet   = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
+  const camelot  = new ethers.Contract(CAMELOT, SUSHI_ABI, wallet); // Camelot V2 uses same V2 ABI
   const sushi    = new ethers.Contract(SUSHI, SUSHI_ABI, wallet);
   const quoter   = new ethers.Contract(UNIV3_QUOTER, UNIV3_QUOTER_ABI, provider);
   const usdcC    = new ethers.Contract(USDC, ERC20_ABI, wallet);
@@ -150,36 +154,55 @@ async function main() {
   console.log('\n=== CROSS-DEX ARB SCANNER ===');
   console.log('Wallet:  ', wallet.address);
   console.log('Amount:  ', amountUSDC, 'USDC');
-  console.log('Pair:    USDC/WETH | Sushi ↔ UniV3');
+  console.log('Venues:  Sushi (0.30%) | Camelot (0.25%) | UniV3 (0.05%)');
   console.log('MinNet: $', MIN_NET_PROFIT_USD);
 
-  // ── Step 1: Quote both DEXes ───────────────────────────────────────────────
-  const [sushiAmounts, univ3Out] = await Promise.all([
+  // ── Step 1: Quote all 3 venues USDC→WETH ─────────────────────────────────
+  const [sushiAmounts, univ3Out, camelotAmounts] = await Promise.all([
     sushi.getAmountsOut(amountInRaw, [USDC, WETH]),
     quoter.callStatic.quoteExactInputSingle(USDC, WETH, POOL_FEE, amountInRaw, 0),
+    camelot.getAmountsOut(amountInRaw, [USDC, WETH]).catch(() => [null, ethers.BigNumber.from(0)]),
   ]);
-  const sushiWethOut = sushiAmounts[1];
-  const univ3WethOut = univ3Out;
+  const sushiWethOut   = sushiAmounts[1];
+  const camelotWethOut = camelotAmounts[1] ?? ethers.BigNumber.from(0);
+  const univ3WethOut   = univ3Out;
 
-  const sushiPrice = parseFloat(ethers.utils.formatEther(sushiWethOut)) / amountUSDC;
-  const univ3Price = parseFloat(ethers.utils.formatEther(univ3WethOut)) / amountUSDC;
+  const fmtWeth = bn => parseFloat(ethers.utils.formatEther(bn));
+  const toUsdc  = bn => fmtWeth(bn) / amountUSDC;
 
   console.log('\n── Price Quotes ──');
-  console.log(`  Sushi:  ${ethers.utils.formatEther(sushiWethOut)} WETH (${(1/sushiPrice).toFixed(2)} USDC/ETH)`);
-  console.log(`  UniV3:  ${ethers.utils.formatEther(univ3WethOut)} WETH (${(1/univ3Price).toFixed(2)} USDC/ETH)`);
+  console.log(`  sushi   : ${ethers.utils.formatEther(sushiWethOut)} WETH (${(1/toUsdc(sushiWethOut)).toFixed(2)} USDC/ETH) fee=0.30%`);
+  console.log(`  camelot : ${ethers.utils.formatEther(camelotWethOut)} WETH (${(1/toUsdc(camelotWethOut)).toFixed(2)} USDC/ETH) fee=0.25%`);
+  console.log(`  univ3   : ${ethers.utils.formatEther(univ3WethOut)} WETH (${(1/toUsdc(univ3WethOut)).toFixed(2)} USDC/ETH) fee=0.05%`);
 
-  // ── Step 2: Determine direction ────────────────────────────────────────────
-  // Buy on the DEX that gives MORE WETH per USDC (cheaper WETH), sell on the other
-  const buyOnSushi   = sushiWethOut.gt(univ3WethOut); // Sushi gives more WETH → cheaper → buy there
-  const wethBuyOut   = buyOnSushi ? sushiWethOut : univ3WethOut;  // actual WETH we'd receive on buy leg
-  const minWethOut   = buyOnSushi ? univ3WethOut : sushiWethOut;  // the 'expensive' DEX output
+  // ── Step 2: Best direction across all 3 venues ────────────────────────────
+  // Venue with MOST WETH out = cheapest WETH = best buy
+  // Venue with LEAST WETH out = most expensive WETH = best sell
+  const allVenues = [
+    { name: 'sushi',   wethOut: sushiWethOut,   fee: VENUE_FEES.sushi },
+    { name: 'camelot', wethOut: camelotWethOut,  fee: VENUE_FEES.camelot },
+    { name: 'univ3',   wethOut: univ3WethOut,    fee: VENUE_FEES.univ3 },
+  ].filter(v => v.wethOut.gt(0));
+
+  const sortedDesc = [...allVenues].sort((a,b) => a.wethOut.gt(b.wethOut) ? -1 : 1);
+  const buyVenue   = sortedDesc[0];    // max WETH out = cheapest buy
+  const sellVenue  = sortedDesc[sortedDesc.length-1]; // min WETH out = priciest sell
+  const wethBuyOut = buyVenue.wethOut;
+  const minWethOut = sellVenue.wethOut;
+
   const div = minWethOut.gt(0)
     ? parseFloat(ethers.utils.formatEther(wethBuyOut.sub(minWethOut).abs())) / parseFloat(ethers.utils.formatEther(minWethOut)) * 10000
     : 0;
 
-  console.log(`  Divergence: ${div.toFixed(1)} bps | Buy on: ${buyOnSushi ? 'Sushi' : 'UniV3'} (more WETH out)`);
-  console.log(`  Route hash: ${buyOnSushi ? 'sushi→univ3' : 'univ3→sushi'}`);
-  console.log(`  Sushi fee: 0.30% | UniV3 fee: 0.05%`);
+  const totalFeePct       = buyVenue.fee + sellVenue.fee;
+  const feeBreakevenBps   = Math.round(totalFeePct * 100);
+  const aboveFeeFloor     = div >= feeBreakevenBps;
+
+  const buyOnSushi = buyVenue.name !== 'univ3'; // execution: non-univ3 uses V2 path
+
+  console.log(`\n  Best route: ${buyVenue.name}→${sellVenue.name}`);
+  console.log(`  Fee drag:   ${buyVenue.fee}% + ${sellVenue.fee}% = ${totalFeePct.toFixed(2)}% (need ≥${feeBreakevenBps} bps to break even before gas)`);
+  console.log(`  Divergence: ${div.toFixed(1)} bps ${aboveFeeFloor ? '✅ above fee floor' : '❌ below fee floor — losing before gas'}`);
 
   // ── Step 3: Quote leg 2 (sell side) using actual weth from buy leg ──────────
   const wethToSell = wethBuyOut;
