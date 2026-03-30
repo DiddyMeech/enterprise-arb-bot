@@ -5,14 +5,11 @@ const STANDARD_EXECUTOR_IFACE = new ethers.utils.Interface([
 ]);
 
 const FLASH_EXECUTOR_IFACE = new ethers.utils.Interface([
-  'function requestFlashLoan(address _token,uint256 _amount,bytes calldata _params) external'
+  'function requestFlashLoan(address asset,uint256 amount,bytes calldata params) external'
 ]);
 
 function buildExecutionPlan({ executorAddress, route, gasLimit = 900000 }) {
-  if (!executorAddress) {
-    throw new Error('MISSING_EXECUTOR_ADDRESS');
-  }
-
+  if (!executorAddress) throw new Error('MISSING_EXECUTOR_ADDRESS');
   if (!route || !Array.isArray(route.legs) || route.legs.length < 2) {
     throw new Error('INVALID_ROUTE');
   }
@@ -38,26 +35,36 @@ function buildExecutionPlan({ executorAddress, route, gasLimit = 900000 }) {
   };
 }
 
-function buildFlashExecutionPlan({ flashExecutorAddress, route, gasLimit = 1200000 }) {
-  if (!flashExecutorAddress) {
-    throw new Error('MISSING_FLASH_EXECUTOR_ADDRESS');
-  }
-
+function buildFlashExecutionPlan({
+  flashExecutorAddress,
+  route,
+  gasLimit = 1300000
+}) {
+  if (!flashExecutorAddress) throw new Error('MISSING_FLASH_EXECUTOR_ADDRESS');
   if (!route || !Array.isArray(route.legs) || route.legs.length < 2) {
     throw new Error('INVALID_ROUTE');
   }
 
-  const targets = route.legs.map((leg) => leg.router);
-  const payloads = route.legs.map((leg) =>
-    ethers.utils.defaultAbiCoder.encode(
-      ['address', 'address', 'uint256', 'uint256', 'uint256'],
-      [leg.tokenIn, leg.tokenOut, leg.amountInRaw, leg.minOutRaw, route.deadline]
-    )
-  );
+  const flashRoute = {
+    profitToken: route.tokenIn,
+    minProfitRaw: route.minProfitTokenRaw || '1',
+    deadline: route.deadline,
+    legs: route.legs.map((leg) => ({
+      dexKind: leg.kind === 'v3' ? 1 : 0,
+      router: leg.router,
+      tokenIn: leg.tokenIn,
+      tokenOut: leg.tokenOut,
+      amountInRaw: leg.amountInRaw,
+      minOutRaw: leg.minOutRaw,
+      fee: leg.fee || 0
+    }))
+  };
 
   const params = ethers.utils.defaultAbiCoder.encode(
-    ['address[]', 'bytes[]'],
-    [targets, payloads]
+    [
+      'tuple(address profitToken,uint256 minProfitRaw,uint256 deadline,tuple(uint8 dexKind,address router,address tokenIn,address tokenOut,uint256 amountInRaw,uint256 minOutRaw,uint24 fee)[] legs)'
+    ],
+    [flashRoute]
   );
 
   const calldata = FLASH_EXECUTOR_IFACE.encodeFunctionData('requestFlashLoan', [
@@ -74,4 +81,7 @@ function buildFlashExecutionPlan({ flashExecutorAddress, route, gasLimit = 12000
   };
 }
 
-module.exports = { buildExecutionPlan, buildFlashExecutionPlan };
+module.exports = {
+  buildExecutionPlan,
+  buildFlashExecutionPlan
+};

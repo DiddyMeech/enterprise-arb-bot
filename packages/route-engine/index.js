@@ -136,7 +136,8 @@ async function buildTwoLegRoutes({
             amountInRaw: leg1.amountInRaw,
             expectedOutRaw: leg1.amountOutRaw,
             minOutRaw: leg1MinOutRaw,
-            feeBps: leg1.feeBps
+            feeBps: leg1.feeBps,
+            fee: leg1.fee || 0
           },
           {
             dex: leg2.dex,
@@ -147,7 +148,8 @@ async function buildTwoLegRoutes({
             amountInRaw: leg2.amountInRaw,
             expectedOutRaw: leg2.amountOutRaw,
             minOutRaw: leg2MinOutRaw,
-            feeBps: leg2.feeBps
+            feeBps: leg2.feeBps,
+            fee: leg2.fee || 0
           }
         ]
       });
