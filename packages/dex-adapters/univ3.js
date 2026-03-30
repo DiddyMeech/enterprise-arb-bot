@@ -2,7 +2,8 @@ const { ethers } = require('ethers');
 const { getDex } = require('../../config/chains');
 
 const UNIV3_QUOTER_IFACE = new ethers.utils.Interface([
-  'function quoteExactInputSingle(address tokenIn,address tokenOut,uint24 fee,uint256 amountIn,uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'
+  // QuoterV2 ABI — used on Polygon (0x61fFE014bA17989E743c5F6cB21bF9697530B21e)
+  'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)'
 ]);
 
 class UniV3Adapter {
@@ -39,13 +40,13 @@ class UniV3Adapter {
   }
 
   async quoteExactIn({ tokenIn, tokenOut, amountInRaw }) {
-    const amountOut = await this.contract.callStatic.quoteExactInputSingle(
+    const [amountOut] = await this.contract.callStatic.quoteExactInputSingle({
       tokenIn,
       tokenOut,
-      this.fee,
-      amountInRaw,
-      0
-    );
+      amountIn: amountInRaw,
+      fee: this.fee,
+      sqrtPriceLimitX96: 0
+    });
 
     return {
       dex: this.name,
