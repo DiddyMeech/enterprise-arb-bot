@@ -9,10 +9,18 @@ const CHAINS = {
       process.env.RPC_URL_ARBITRUM ||
       process.env.ARB_RPC_URL ||
       '',
+    rpcs: String(process.env.ARBITRUM_RPC_URLS || process.env.ARBITRUM_RPC_URL || '')
+      .split(',').map((v) => v.trim()).filter(Boolean),
+    wss: String(process.env.ARBITRUM_WSS_URLS || '')
+      .split(',').map((v) => v.trim()).filter(Boolean),
     explorerBaseUrl: 'https://arbiscan.io',
     executorAddress:
       process.env.ARBITRUM_EXECUTOR_ADDRESS ||
       process.env.ARB_CONTRACT_ADDRESS ||
+      '',
+    flashExecutorAddress:
+      process.env.ARBITRUM_FLASH_EXECUTOR_ADDRESS ||
+      process.env.ARB_FLASH_EXECUTOR_ADDRESS ||
       '',
     tokens: {
       USDC: {
@@ -51,9 +59,16 @@ const CHAINS = {
       process.env.BASE_RPC_URL ||
       process.env.RPC_URL_BASE ||
       '',
+    rpcs: String(process.env.BASE_RPC_URLS || process.env.BASE_RPC_URL || '')
+      .split(',').map((v) => v.trim()).filter(Boolean),
+    wss: String(process.env.BASE_WSS_URLS || '')
+      .split(',').map((v) => v.trim()).filter(Boolean),
     explorerBaseUrl: 'https://basescan.org',
     executorAddress:
       process.env.BASE_EXECUTOR_ADDRESS ||
+      '',
+    flashExecutorAddress:
+      process.env.BASE_FLASH_EXECUTOR_ADDRESS ||
       '',
     tokens: {
       USDC: {

@@ -31,80 +31,82 @@ class ExecutorApp {
   async submitValidatedTrade(validationResult) {
     const { payload, evaluation } = validationResult;
     const chain = this.getChain(payload.chain);
-    const provider = new ethers.providers.JsonRpcProvider(chain.rpcs[0]);
+
+    const { RpcManager } = require('../../packages/rpc-manager');
+    const {
+      buildExecutionPlan,
+      buildFlashExecutionPlan
+    } = require('../../packages/execution-engine');
+
+    const rpcManager = RpcManager.fromEnv(payload.chain);
+    const provider = rpcManager.getProvider();
     const wallet = new ethers.Wallet(config.PRIVATE_KEY, provider);
-    const txRouter = new TxRouter(
-      chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
-      provider,
-      wallet
-    );
-    const mevRelay = chain.mevRelay ? new MevRelay([chain.mevRelay], chain.name) : null;
+
+    const useFlashMode =
+      String(process.env.FLASH_LOAN_ENABLED || 'false').toLowerCase() === 'true';
 
     if (!payload?.routePlan?.legs?.length) {
-      throw new Error("Executor received no route legs");
+      throw new Error('Executor received no route legs');
     }
 
-    const executionPlan = buildExecutionPlan({
-      executorAddress: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
-      mode: evaluation.mode || "wallet",
-      route: {
-        chain: payload.chain,
-        tokenIn: payload.tokenInAddress || payload.tokenIn,
-        tokenOut: payload.tokenOutAddress || payload.tokenOut,
-        amountInRaw: payload.amountInRaw,
-        minProfitTokenRaw: payload.minProfitTokenRaw || "0",
-        minOutRaw: payload.routePlan.minOutRaw || payload.routePlan.expectedAmountOutRaw || "0",
-        deadline: Math.floor(Date.now() / 1000) + 20,
-        legs: payload.routePlan.legs
-      },
-      gasLimit: payload.executionPlan?.gasLimit || 700000
+    const route = {
+      chain:             payload.chain,
+      tokenIn:           payload.tokenInAddress || payload.tokenIn,
+      tokenOut:          payload.tokenOutAddress || payload.tokenOut,
+      amountInRaw:       payload.routePlan.amountInRaw || payload.amountInRaw,
+      minProfitTokenRaw: payload.routePlan.minProfitTokenRaw || '1',
+      deadline:          payload.routePlan.deadline || Math.floor(Date.now() / 1000) + 45,
+      legs:              payload.routePlan.legs
+    };
+
+    const executionPlan = useFlashMode
+      ? buildFlashExecutionPlan({
+          flashExecutorAddress:
+            chain.flashExecutorAddress || process.env.ARB_FLASH_EXECUTOR_ADDRESS,
+          route
+        })
+      : buildExecutionPlan({
+          executorAddress: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
+          route
+        });
+
+    logger.info('[EXECUTOR] Plan ready', {
+      chain:  payload.chain,
+      mode:   executionPlan.type,
+      rpc:    provider.__rpcUrl,
+      target: executionPlan.target
     });
-
-    const gasEngine = this.getGasEngine(chain.name, evaluation?.diagnostics?.gasPrice);
-    const gasParams = await gasEngine.calculateOptimalGas(
-      evaluation.netProfitUsd || evaluation.metrics?.netProfitUsd || 0
-    );
-
-    logger.info("[EXECUTOR] Prepared canonical execution plan", {
-      chain: chain.name,
-      mode: executionPlan.mode,
-      routeHash: executionPlan.routeHash,
-      amountInUsd: evaluation.bestSizeUsd
-    });
-
-    const signedTx = await txRouter.buildPayload(
-      payload.tokenIn,
-      payload.amountInRaw,
-      executionPlan.targets,
-      executionPlan.payloads,
-      {
-        calldata: executionPlan.calldata,
-        gasLimit: executionPlan.gasLimit,
-        targetGasPrice: gasParams.targetGasPrice
-      }
-    );
 
     if (config.SAFE_MODE) {
-      logger.warn("[SAFE MODE] Execution payload generated but not broadcast", {
-        chain: chain.name,
-        routeHash: executionPlan.routeHash
+      logger.warn('[SAFE MODE] Payload built but not broadcast', {
+        chain:  payload.chain,
+        mode:   executionPlan.type,
+        target: executionPlan.target
       });
-      return {
-        ok: true,
-        status: "SIMULATED_SUCCESS",
-        execId: `dry_run_${Date.now()}`
-      };
+      return { ok: true, status: 'SIMULATED_SUCCESS', execId: `dry_run_${Date.now()}` };
     }
 
-    if (!mevRelay) {
-      throw new Error(`No relay configured for chain ${chain.name}`);
-    }
+    const tx = await wallet.sendTransaction({
+      to:       executionPlan.target,
+      data:     executionPlan.calldata,
+      gasLimit: executionPlan.gasLimit
+    });
 
-    const relayResult = await mevRelay.broadcastBundle(signedTx);
-    gasEngine.reportOutcome(true, gasParams.targetGasPrice);
+    logger.info('[EXECUTOR] TX submitted', { chain: payload.chain, mode: executionPlan.type, txHash: tx.hash });
 
-    return relayResult;
+    const receipt = await tx.wait();
+    rpcManager.markSuccess(provider.__rpcUrl);
+
+    logger.info('[EXECUTOR] TX confirmed', {
+      chain:   payload.chain,
+      txHash:  tx.hash,
+      status:  receipt.status,
+      gasUsed: receipt.gasUsed?.toString?.() || null
+    });
+
+    return { txHash: tx.hash, receipt };
   }
+
 }
 
 module.exports = new ExecutorApp();
