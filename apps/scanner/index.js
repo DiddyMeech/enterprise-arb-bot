@@ -134,7 +134,7 @@ async function scanChain({ chainKey, nativeTokenUsd }) {
 async function main() {
   const activeChains = THRESHOLDS.activeChains.length
     ? THRESHOLDS.activeChains
-    : ['arbitrum'];
+    : ['polygon'];
 
   const nativeTokenUsd = Number(process.env.ETH_PRICE_USD_HINT || '2200');
 

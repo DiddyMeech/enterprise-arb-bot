@@ -2,7 +2,7 @@ require('dotenv').config();
 const { simulate } = require('../apps/simulator');
 
 async function main() {
-  const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'arbitrum';
+  const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'polygon';
   const amountInUsd = Number(process.env.DRY_RUN_USD || '25');
   const nativeTokenUsd = Number(process.env.ETH_PRICE_USD_HINT || '2200');
 

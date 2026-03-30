@@ -37,7 +37,9 @@ async function simulate({ chainKey, amountInUsd, nativeTokenUsd }) {
     const executionPlan = useFlashMode
       ? buildFlashExecutionPlan({
           flashExecutorAddress:
-            chain.flashExecutorAddress || process.env.ARB_FLASH_EXECUTOR_ADDRESS,
+            chain.flashExecutorAddress ||
+            process.env.POLYGON_FLASH_EXECUTOR_ADDRESS ||
+            process.env.ARB_FLASH_EXECUTOR_ADDRESS,
           route
         })
       : buildExecutionPlan({
@@ -69,7 +71,7 @@ async function simulate({ chainKey, amountInUsd, nativeTokenUsd }) {
 
 if (require.main === module) {
   (async () => {
-    const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'arbitrum';
+    const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'polygon';
     const amountInUsd = Number(process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || '25');
     const nativeTokenUsd = Number(process.env.ETH_PRICE_USD_HINT || '2200');
     const result = await simulate({ chainKey, amountInUsd, nativeTokenUsd });

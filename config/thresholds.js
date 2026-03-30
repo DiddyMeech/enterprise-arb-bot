@@ -16,7 +16,7 @@ const THRESHOLDS = {
   gasUnitsApprox: num('GAS_UNITS_APPROX', 260000),
   routeDeadlineSeconds: num('ROUTE_DEADLINE_SECONDS', 45),
   safeMode: String(process.env.SAFE_MODE || 'true').toLowerCase() === 'true',
-  activeChains: String(process.env.ACTIVE_CHAINS || 'arbitrum')
+  activeChains: String(process.env.ACTIVE_CHAINS || 'polygon')
     .split(',')
     .map((v) => v.trim().toLowerCase())
     .filter(Boolean)
