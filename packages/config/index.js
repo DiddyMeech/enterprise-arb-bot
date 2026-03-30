@@ -22,6 +22,11 @@ module.exports = {
         process.env.ARB_RPC_SCAN,
         process.env.ARB_RPC_CONF
       ].filter(Boolean),
+      // Premium-only scan pool — never hits public/rate-limited nodes
+      scanRpcs: [
+        ...(process.env.ARB_RPC_NODES ? process.env.ARB_RPC_NODES.split(',').map(s => s.trim()).filter(Boolean) : []),
+        process.env.ARB_RPC_EXEC,
+      ].filter(Boolean),
       mevRelay: process.env.ARB_MEV_RELAY || "",
       contractAddress: process.env.ARB_CONTRACT_ADDRESS || "",
       pollingInterval: 1000
@@ -34,6 +39,11 @@ module.exports = {
         process.env.BASE_RPC_EXEC,
         process.env.BASE_RPC_SCAN,
         process.env.BASE_RPC_CONF
+      ].filter(Boolean),
+      // Premium-only scan pool
+      scanRpcs: [
+        ...(process.env.BASE_RPC_NODES ? process.env.BASE_RPC_NODES.split(',').map(s => s.trim()).filter(Boolean) : []),
+        process.env.BASE_RPC_EXEC,
       ].filter(Boolean),
       mevRelay: process.env.BASE_MEV_RELAY || "",
       contractAddress: process.env.BASE_CONTRACT_ADDRESS || "",

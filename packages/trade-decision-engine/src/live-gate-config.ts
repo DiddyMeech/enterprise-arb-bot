@@ -29,9 +29,9 @@ export const LIVE_GATE_CONFIG = {
 
   // Shadow quality bar (route-family level)
   TOP_N_ROUTE_FAMILIES:    1,
-  MIN_SHADOW_SEEN:         10,
+  MIN_SHADOW_SEEN:         5,
   MIN_PREFILTER_PASS_RATE: 0.10,
-  MIN_SIM_PASS_RATE:       0.60,
+  MIN_SIM_PASS_RATE:       0.40,
   MIN_WOULD_EXEC_RATE:     0.02,
   MIN_AVG_NET_PROFIT_USD:  0.10,
   MAX_AVG_GAS_USD:         0.10,

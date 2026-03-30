@@ -71,10 +71,11 @@ function chainCfg(name) {
 
 function makeProvider(name) {
   const cfg = chainCfg(name);
-  if (!cfg || !cfg.rpcs?.length) throw new Error(`No RPC for ${name}`);
+  const pool = (cfg.scanRpcs?.length ? cfg.scanRpcs : cfg.rpcs);
+  if (!pool?.length) throw new Error(`No RPC for ${name}`);
   // Round-robin using Date for variety
-  const idx = Math.floor(Date.now() / 10000) % cfg.rpcs.length;
-  return new ethers.providers.StaticJsonRpcProvider(cfg.rpcs[idx], { chainId: cfg.chainId, name });
+  const idx = Math.floor(Date.now() / 10000) % pool.length;
+  return new ethers.providers.StaticJsonRpcProvider(pool[idx], { chainId: cfg.chainId, name });
 }
 
 // ── Lazy orchestrator ─────────────────────────────────────────────────────────
@@ -92,12 +93,21 @@ async function getOrchestrator() {
       decodeCommonRevert,
     } = require('@arb/trade-decision-engine');
 
+    const PRIVATE_KEY = process.env.PRIVATE_KEY || '';
+
     const logger = new EngineLogger({ service: 'arb-scanner', minLevel: 'info', json: true });
+
+    function getWallet(chain) {
+      const cfg = chainCfg(chain);
+      if (!cfg?.rpcs?.length) throw new Error(`No RPC for ${chain}`);
+      const execRpc = process.env[chain === 'arbitrum' ? 'ARB_RPC_EXEC' : 'BASE_RPC_EXEC'] || cfg.rpcs[0];
+      const provider = new ethers.providers.StaticJsonRpcProvider(execRpc, { chainId: cfg.chainId, name: chain });
+      return new ethers.Wallet(PRIVATE_KEY, provider);
+    }
 
     async function quoteExactRoute(opp, amountInUsd) {
       try {
         const provider = makeProvider(opp.chain);
-        const cfg = chainCfg(opp.chain);
         const usdcAddr = opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
         const wethAddr = opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
         const sushiRouter = opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
@@ -174,13 +184,76 @@ async function getOrchestrator() {
       }
     }
 
+    // ── Real sendExecution — broadcasts a signed tx on-chain ──────────────────
+    async function sendExecution(candidate) {
+      const { evaluation, rawOpportunity: opp } = candidate;
+      try {
+        const cfg2 = chainCfg(opp.chain);
+        const executorAddress = cfg2?.contractAddress || config.ARB_CONTRACT_ADDRESS;
+        const wallet = getWallet(opp.chain);
+
+        const usdcAddr = opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
+        const wethAddr = opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
+        const router   = opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
+        const isUsdcIn = opp.tokenIn === 'USDC';
+        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
+        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
+        const inDecimals   = isUsdcIn ? 6 : 18;
+        const sizeUsd      = evaluation.bestSizeUsd ?? TRADE_USD_HINT;
+        const amountInRaw  = ethers.utils.parseUnits(String(Math.round(sizeUsd)), inDecimals).toString();
+        const deadline     = Math.floor(Date.now() / 1000) + 60;
+
+        let leg2AmountInRaw = amountInRaw;
+        try {
+          const sushi = new ethers.Contract(router, SUSHI_IFACE, wallet.provider);
+          const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
+          leg2AmountInRaw = amounts[1].toString();
+        } catch { /* use initial amount */ }
+
+        const normalized = normalizeRoute({
+          deadline,
+          legs: [
+            { dex: opp.dexBuy,  router, tokenIn: tokenInAddr,  tokenOut: tokenOutAddr, recipient: executorAddress, amountInRaw,      minOutRaw: '1' },
+            { dex: opp.dexSell, router, tokenIn: tokenOutAddr, tokenOut: tokenInAddr,  recipient: executorAddress, amountInRaw: leg2AmountInRaw, minOutRaw: '1' },
+          ],
+        });
+
+        const encodedLegs = normalized.map(l => encodeDexLeg(l));
+        const plan = buildExecutionPlan({
+          executorAddress,
+          mode: evaluation.mode ?? 'wallet',
+          route: { chain: opp.chain, tokenIn: tokenInAddr, tokenOut: tokenInAddr, amountInRaw, minProfitTokenRaw: '0', minOutRaw: '1', deadline, legs: encodedLegs },
+        });
+
+        const tx = await wallet.sendTransaction({ to: plan.target, data: plan.calldata, gasLimit: plan.gasLimit });
+        return { ok: true, txHash: tx.hash };
+      } catch (err) {
+        return { ok: false, error: err, decodedReason: decodeCommonRevert(err) };
+      }
+    }
+
+    // ── Real waitForReceipt ───────────────────────────────────────────────────
+    async function waitForReceipt(txHash, chain) {
+      try {
+        const wallet = getWallet(chain);
+        const receipt = await wallet.provider.waitForTransaction(txHash, 1, 90_000);
+        if (!receipt) return { ok: false, txHash, error: 'TIMEOUT' };
+        const gasUsd = Number(ethers.utils.formatEther(
+          receipt.gasUsed.mul(receipt.effectiveGasPrice ?? ethers.BigNumber.from(0))
+        )) * (chain === 'arbitrum' ? 1800 : 2200);
+        return { ok: true, txHash, reverted: receipt.status === 0, gasUsd };
+      } catch (err) {
+        return { ok: false, txHash, error: err };
+      }
+    }
+
     const orch = new ArbOrchestrator(
       ORCHESTRATOR_CONFIG,
       {
         quoteExactRoute,
         simulateExactExecution,
-        sendExecution: async () => ({ ok: false, error: 'SHADOW_MODE_NO_SEND' }),
-        waitForReceipt: async (txHash) => ({ ok: false, txHash, error: 'SHADOW_MODE' }),
+        sendExecution,
+        waitForReceipt,
         persistReplay: async (record) => {
           if (record.phase === 'simulate' && record.evaluation?.ok) {
             console.log(JSON.stringify({ event: 'SHADOW_WOULD_EXECUTE', chain: record.opportunity?.chain, id: record.opportunity?.id, net: record.evaluation?.netProfitUsd }));
@@ -191,7 +264,7 @@ async function getOrchestrator() {
       logger,
     );
     orch.startBackgroundTasks();
-    console.log('[ORCH] New orchestrator active — shadow mode ✅');
+    console.log(`[ORCH] Orchestrator active — mode: ${ORCHESTRATOR_CONFIG.mode}`);
     return orch;
   })();
   return orchPromise;

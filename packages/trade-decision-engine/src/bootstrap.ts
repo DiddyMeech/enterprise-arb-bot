@@ -39,7 +39,8 @@ const CHAIN_CONFIG_MAP: Record<string, {
 };
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-const REPLAY_DIR = path.resolve(__dirname, "../../../../arb-bot/replays");
+const REPLAY_DIR   = path.resolve(__dirname, "../../../../arb-bot/replays");
+const SNAPSHOT_PATH = path.resolve(__dirname, "../../../../cache/shadow-stats.json");
 
 const logger = new EngineLogger({
   service: "arb-bot",
@@ -320,6 +321,18 @@ async function persistReplay(record: any): Promise<void> {
     // Non-fatal — don't let replay I/O errors kill the execution loop
   }
 }
+
+// ── Shadow tracker — rehydrated from disk so gate stats survive restarts ──────
+import { ShadowRouteTracker } from "./shadow-route-stats";
+
+const shadowTracker = ShadowRouteTracker.loadSnapshot(SNAPSHOT_PATH);
+const loadedCount   = (shadowTracker as any)["stats"].size;
+logger.info("SHADOW_SNAPSHOT_LOADED", { routeCount: loadedCount, path: SNAPSHOT_PATH });
+
+// Persist stats every 60 s so a restart doesn't wipe accumulated data
+setInterval(() => {
+  shadowTracker.saveSnapshot(SNAPSHOT_PATH);
+}, 60_000);
 
 // ── Orchestrator initialization ────────────────────────────────────────────
 const orchestrator = new ArbOrchestrator(

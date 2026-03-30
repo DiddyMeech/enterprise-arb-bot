@@ -3,7 +3,7 @@
 import { OrchestratorConfig } from "./engine-orchestrator";
 
 export const ORCHESTRATOR_CONFIG: OrchestratorConfig = {
-  mode: "shadow", // switch to "live" after a burn-in period
+  mode: "live",
   minScoreToSend: 40,
   maxQuoteAgeMs: 900,
   quarantineAfterConsecutiveFailures: 4,

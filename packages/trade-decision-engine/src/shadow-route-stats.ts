@@ -1,3 +1,5 @@
+import fs from "fs";
+
 /**
  * shadow-route-stats.ts
  *
@@ -137,6 +139,38 @@ export class ShadowRouteTracker {
       generatedAt: Date.now(),
       routes: Array.from(this.stats.values()),
     };
+  }
+
+  /**
+   * Persists current stats to a JSON file so they survive process restarts.
+   * Non-fatal: errors are swallowed so a disk issue never kills the engine.
+   */
+  saveSnapshot(filePath: string): void {
+    try {
+      const snap = this.snapshot();
+      fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), "utf-8");
+    } catch {
+      // non-fatal
+    }
+  }
+
+  /**
+   * Rehydrates a ShadowRouteTracker from a previously saved snapshot file.
+   * Returns an empty tracker if the file is missing or unreadable.
+   */
+  static loadSnapshot(filePath: string): ShadowRouteTracker {
+    const tracker = new ShadowRouteTracker();
+    try {
+      if (!fs.existsSync(filePath)) return tracker;
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const snap: ShadowStatsSnapshot = JSON.parse(raw);
+      for (const route of snap.routes ?? []) {
+        tracker["stats"].set(route.routeFamily, route);
+      }
+    } catch {
+      // return empty tracker if file is corrupt
+    }
+    return tracker;
   }
 
   /**
