@@ -43,10 +43,12 @@ function makeAdapters(chainKey, provider) {
     try {
       adapters.push(new UniV3Adapter({ chainKey, provider, feeTier: 500 }));
     } catch {}
-    // Also probe 3000 fee tier separately
-    try {
-      adapters.push(new UniV3Adapter({ chainKey, provider, feeTier: 3000 }));
-    } catch {}
+    // 3000 fee tier — off by default (slower, less liquidity on Polygon)
+    if (String(process.env.ENABLE_UNIV3_3000 || 'false').toLowerCase() === 'true') {
+      try {
+        adapters.push(new UniV3Adapter({ chainKey, provider, feeTier: 3000 }));
+      } catch {}
+    }
   }
 
   return adapters;
@@ -97,9 +99,13 @@ async function buildTwoLegRoutes({
     ? [[tokenInSymbol, tokenOutSymbol]]
     : buildPairs(chainKey);
 
+  // Single size from env — no multi-size probing unless MULTI_SIZE_PROBE=true
+  const multiSize = String(process.env.MULTI_SIZE_PROBE || 'false').toLowerCase() === 'true';
   const sizesToProbe = amountInUsd
     ? [amountInUsd]
-    : [5, 10, 25];
+    : multiSize
+      ? [5, 25, 100, 500]
+      : [Number(process.env.TRADE_USD_HINT || 500)];
 
   for (const [inSym, outSym] of pairsToScan) {
     let tokenIn, tokenOut;
