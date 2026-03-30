@@ -28,9 +28,9 @@ function estimateGasUsd({
 }
 
 function makeAdapters(chainKey, provider) {
+  // UniV3 disabled until contract supports V3 swap path
   return [
-    new SushiAdapter({ chainKey, provider }),
-    new UniV3Adapter({ chainKey, provider })
+    new SushiAdapter({ chainKey, provider })
   ];
 }
 

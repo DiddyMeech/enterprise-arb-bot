@@ -93,9 +93,42 @@ function logOpportunity(opp) {
   );
 }
 
+const { buildExecutionPlan } = require('../../packages/execution-engine');
+
 async function submitOpportunity(opp) {
-  console.log(`[shadow] submitOpportunity ${opp.id}`);
+  if (THRESHOLDS.safeMode) {
+    console.log(`[SAFE_MODE] Would execute: ${opp.id} | net=$${opp.netProfitUsd.toFixed(4)}`);
+    return;
+  }
+
+  try {
+    const provider = makeProvider(opp.chain);
+    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+    const executorAddress = process.env.ARB_CONTRACT_ADDRESS || getChain(opp.chain).executorAddress;
+
+    if (!executorAddress) {
+      console.error('[EXEC] No executor address configured — set ARB_CONTRACT_ADDRESS in .env');
+      return;
+    }
+
+    const plan = buildExecutionPlan({ executorAddress, route: opp.routePlan });
+
+    console.log(`[EXEC] Sending tx | id=${opp.id} | net=$${opp.netProfitUsd.toFixed(4)}`);
+
+    const tx = await wallet.sendTransaction({
+      to: plan.target,
+      data: plan.calldata,
+      gasLimit: plan.gasLimit
+    });
+
+    console.log(`[EXEC] TX HASH: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`[EXEC] ${receipt.status === 1 ? 'SUCCESS ✅' : 'REVERTED ❌'} block=${receipt.blockNumber}`);
+  } catch (err) {
+    console.error('[EXEC ERROR]', err.message);
+  }
 }
+
 
 async function scanChain({ chainKey, nativeTokenUsd }) {
   try {
