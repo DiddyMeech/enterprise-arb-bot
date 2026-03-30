@@ -3,7 +3,10 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env'
 const { getChain } = require('../../config/chains');
 const { getOptimalQuote } = require('../../packages/quote-engine');
 const { evaluateRoute } = require('../../packages/risk-engine');
-const { buildExecutionPlan, buildFlashExecutionPlan } = require('../../packages/execution-engine');
+const {
+  buildExecutionPlan,
+  buildFlashExecutionPlan
+} = require('../../packages/execution-engine');
 const { RpcManager } = require('../../packages/rpc-manager');
 
 async function simulate({ chainKey, amountInUsd, nativeTokenUsd }) {
@@ -64,4 +67,20 @@ async function simulate({ chainKey, amountInUsd, nativeTokenUsd }) {
   });
 }
 
-module.exports = { simulate };
+if (require.main === module) {
+  (async () => {
+    const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'arbitrum';
+    const amountInUsd = Number(process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || '25');
+    const nativeTokenUsd = Number(process.env.ETH_PRICE_USD_HINT || '2200');
+    const result = await simulate({ chainKey, amountInUsd, nativeTokenUsd });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
+  })().catch((err) => {
+    console.error('[simulator] fatal', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  simulate
+};

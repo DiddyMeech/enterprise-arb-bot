@@ -21,17 +21,20 @@ function estimateGasUsd({
   gasUnits = THRESHOLDS.gasUnitsApprox,
   nativeTokenUsd
 }) {
-  const gasCostEth = Number(ethers.utils.formatEther(
-    bn(gasPriceWei).mul(gasUnits)
-  ));
+  const gasCostEth = Number(
+    ethers.utils.formatEther(bn(gasPriceWei).mul(gasUnits))
+  );
   return gasCostEth * Number(nativeTokenUsd);
 }
 
 function makeAdapters(chainKey, provider) {
-  // UniV3 disabled until contract supports V3 swap path
-  return [
-    new SushiAdapter({ chainKey, provider })
-  ];
+  const adapters = [new SushiAdapter({ chainKey, provider })];
+
+  if (String(process.env.ENABLE_UNIV3 || 'true').toLowerCase() === 'true') {
+    adapters.push(new UniV3Adapter({ chainKey, provider }));
+  }
+
+  return adapters;
 }
 
 async function getGasPriceWei(provider) {
@@ -126,6 +129,7 @@ async function buildTwoLegRoutes({
         gasPriceWei: String(gasPriceWei),
         deadline:
           Math.floor(Date.now() / 1000) + THRESHOLDS.routeDeadlineSeconds,
+        minProfitTokenRaw: '1',
         legs: [
           {
             dex: leg1.dex,

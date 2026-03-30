@@ -158,4 +158,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { scanChain, normalizeOpportunity };
+module.exports = {
+  scanChain,
+  normalizeOpportunity
+};

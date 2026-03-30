@@ -85,4 +85,10 @@ function makeProvider(chainKey) {
   return new ethers.providers.JsonRpcProvider(url);
 }
 
-module.exports = { CHAINS, getChain, getToken, getDex, makeProvider };
+module.exports = {
+  CHAINS,
+  getChain,
+  getToken,
+  getDex,
+  makeProvider
+};

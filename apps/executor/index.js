@@ -37,13 +37,13 @@ class ExecutorApp {
     }
 
     const route = {
-      chain:             payload.chain,
-      tokenIn:           payload.tokenInAddress || payload.routePlan.tokenIn || payload.tokenIn,
-      tokenOut:          payload.tokenOutAddress || payload.routePlan.tokenOut || payload.tokenOut,
-      amountInRaw:       payload.routePlan.amountInRaw || payload.amountInRaw,
+      chain: payload.chain,
+      tokenIn: payload.tokenInAddress || payload.routePlan.tokenIn || payload.tokenIn,
+      tokenOut: payload.tokenOutAddress || payload.routePlan.tokenOut || payload.tokenOut,
+      amountInRaw: payload.routePlan.amountInRaw || payload.amountInRaw,
       minProfitTokenRaw: payload.routePlan.minProfitTokenRaw || '1',
-      deadline:          payload.routePlan.deadline,
-      legs:              payload.routePlan.legs
+      deadline: payload.routePlan.deadline,
+      legs: payload.routePlan.legs
     };
 
     const executionPlan = useFlashMode
@@ -59,38 +59,43 @@ class ExecutorApp {
         });
 
     this.logger.info({
-      msg:    'executor.plan.ready',
-      chain:  payload.chain,
-      mode:   useFlashMode ? 'flash' : 'standard',
-      rpc:    provider.__rpcMeta?.url || null,
+      msg: 'executor.plan.ready',
+      chain: payload.chain,
+      mode: useFlashMode ? 'flash' : 'standard',
+      rpc: provider.__rpcMeta?.url || null,
       target: executionPlan.target
     });
 
     const tx = await wallet.sendTransaction({
-      to:       executionPlan.target,
-      data:     executionPlan.calldata,
+      to: executionPlan.target,
+      data: executionPlan.calldata,
       gasLimit: executionPlan.gasLimit
     });
 
     this.logger.info({
-      msg:   'executor.tx.submitted',
+      msg: 'executor.tx.submitted',
       chain: payload.chain,
-      mode:  useFlashMode ? 'flash' : 'standard',
+      mode: useFlashMode ? 'flash' : 'standard',
       txHash: tx.hash
     });
 
     const receipt = await tx.wait();
 
     this.logger.info({
-      msg:     'executor.tx.confirmed',
-      chain:   payload.chain,
-      txHash:  tx.hash,
-      status:  receipt.status,
+      msg: 'executor.tx.confirmed',
+      chain: payload.chain,
+      txHash: tx.hash,
+      status: receipt.status,
       gasUsed: receipt.gasUsed?.toString?.() || null
     });
 
-    return { txHash: tx.hash, receipt };
+    return {
+      txHash: tx.hash,
+      receipt
+    };
   }
 }
 
-module.exports = { ExecutorApp };
+module.exports = {
+  ExecutorApp
+};

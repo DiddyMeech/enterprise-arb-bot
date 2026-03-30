@@ -130,13 +130,7 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
 
         emit FlashLoanRequested(asset, amount);
 
-        POOL.flashLoanSimple(
-            address(this),
-            asset,
-            amount,
-            params,
-            0
-        );
+        POOL.flashLoanSimple(address(this), asset, amount, params, 0);
     }
 
     function executeOperation(
@@ -157,7 +151,6 @@ contract TitanArbitrageExecutor is FlashLoanSimpleReceiverBase {
         require(route.deadline >= block.timestamp, "DEADLINE");
         require(approvedTokens[asset], "ASSET_NOT_ALLOWED");
 
-        uint256 startBalance = IERC20(asset).balanceOf(address(this));
         uint256 currentAmount = amount;
         address currentToken = asset;
 
