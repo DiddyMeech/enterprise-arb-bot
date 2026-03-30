@@ -1,10 +1,10 @@
 require('dotenv').config();
 require('@nomicfoundation/hardhat-toolbox');
 
-const arbitrumRpc =
-  (process.env.ARBITRUM_SEND_RPC_URLS || '').split(',').map(v => v.trim()).filter(Boolean)[0] ||
-  process.env.ARBITRUM_RPC_URL ||
-  'https://arb1.arbitrum.io/rpc';
+const polygonRpc =
+  (process.env.POLYGON_SEND_RPC_URLS || '').split(',').map(v => v.trim()).filter(Boolean)[0] ||
+  process.env.POLYGON_RPC_URL ||
+  'https://polygon-rpc.com';
 
 module.exports = {
   solidity: {
@@ -17,10 +17,10 @@ module.exports = {
     }
   },
   networks: {
-    arbitrum: {
-      url: arbitrumRpc,
+    polygon: {
+      url: polygonRpc,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 42161
+      chainId: 137
     }
   },
   paths: {

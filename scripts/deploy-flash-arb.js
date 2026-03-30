@@ -14,7 +14,7 @@ function requireAddress(name, value) {
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
-  const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'arbitrum';
+  const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'polygon';
   const aave = getAaveConfig(chainKey);
 
   const poolAddressesProvider = requireAddress(
