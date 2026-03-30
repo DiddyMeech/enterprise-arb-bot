@@ -76,11 +76,8 @@ async function main() {
   // ── Swap ──────────────────────────────────────────────────────────────────
   const deadline  = Math.floor(Date.now() / 1000) + 120;
   const nonce     = await provider.getTransactionCount(wallet.address, 'pending');
-  const feeData   = await provider.getFeeData();
-  // Add 20% buffer on top of baseFee to ensure tx lands
-  const maxFee    = feeData.lastBaseFeePerGas
-    ? feeData.lastBaseFeePerGas.mul(120).div(100).add(feeData.maxPriorityFeePerGas || 0)
-    : feeData.gasPrice.mul(120).div(100);
+  // 2× current gas price guarantees tx lands even if baseFee spikes between poll and inclusion
+  const maxFee    = (await provider.getGasPrice()).mul(2);
 
   console.log(`\nSending swap tx (nonce=${nonce}, maxFee=${ethers.utils.formatUnits(maxFee, 'gwei')} gwei)...`);
   const tx = await router.swapExactTokensForTokens(
@@ -89,7 +86,7 @@ async function main() {
     [USDC_NATIVE, WETH],
     wallet.address,
     deadline,
-    { gasLimit: 300000, maxFeePerGas: maxFee, maxPriorityFeePerGas: ethers.utils.parseUnits('0.01', 'gwei'), nonce }
+    { gasLimit: 300000, gasPrice: maxFee, nonce }
   );
 
   console.log('🚀 TX SENT:', tx.hash);
