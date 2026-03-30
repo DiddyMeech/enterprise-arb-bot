@@ -110,16 +110,18 @@ async function main() {
   console.log(`  UniV3:  ${ethers.utils.formatEther(univ3WethOut)} WETH (${(1/univ3Price).toFixed(2)} USDC/ETH)`);
 
   // ── Step 2: Determine direction ────────────────────────────────────────────
-  const buyOnSushi   = univ3WethOut.gt(sushiWethOut); // UniV3 gives more WETH → Sushi is cheaper, buy there
-  const cheapWethOut = buyOnSushi ? sushiWethOut : univ3WethOut;
-  const div = cheapWethOut.gt(0)
-    ? parseFloat(ethers.utils.formatEther(univ3WethOut.sub(sushiWethOut).abs())) / parseFloat(ethers.utils.formatEther(cheapWethOut)) * 10000
+  // Buy on the DEX that gives MORE WETH per USDC (cheaper WETH), sell on the other
+  const buyOnSushi   = sushiWethOut.gt(univ3WethOut); // Sushi gives more WETH → cheaper → buy there
+  const wethBuyOut   = buyOnSushi ? sushiWethOut : univ3WethOut;  // actual WETH we'd receive on buy leg
+  const minWethOut   = buyOnSushi ? univ3WethOut : sushiWethOut;  // the 'expensive' DEX output
+  const div = minWethOut.gt(0)
+    ? parseFloat(ethers.utils.formatEther(wethBuyOut.sub(minWethOut).abs())) / parseFloat(ethers.utils.formatEther(minWethOut)) * 10000
     : 0;
 
-  console.log(`\n  Divergence: ${div.toFixed(1)} bps | Buy on: ${buyOnSushi ? 'Sushi' : 'UniV3'}`);
+  console.log(`\n  Divergence: ${div.toFixed(1)} bps | Buy on: ${buyOnSushi ? 'Sushi' : 'UniV3'} (more WETH out)`);
 
-  // ── Step 3: Quote leg 2 (sell side) ────────────────────────────────────────
-  const wethToSell = cheapWethOut;
+  // ── Step 3: Quote leg 2 (sell side) using actual weth from buy leg ──────────
+  const wethToSell = wethBuyOut;
   let finalUsdcOut;
 
   if (buyOnSushi) {
