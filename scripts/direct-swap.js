@@ -77,18 +77,19 @@ async function main() {
   const deadline  = Math.floor(Date.now() / 1000) + 120;
   const nonce     = await provider.getTransactionCount(wallet.address, 'pending');
   // Read actual baseFee from latest block — most reliable on Arbitrum
-  const block   = await provider.getBlock('latest');
-  const baseFee = block.baseFeePerGas || ethers.utils.parseUnits('0.1', 'gwei');
-  const maxFee  = baseFee.mul(150).div(100); // 1.5× baseFee — guaranteed to land
+  const block    = await provider.getBlock('latest');
+  const baseFee  = block.baseFeePerGas ?? ethers.BigNumber.from(0);
+  const priority = ethers.utils.parseUnits('0.02', 'gwei');
+  const maxFee   = baseFee.mul(2).add(priority); // 2× headroom handles cross-node lag
 
-  console.log(`\nSending swap tx (nonce=${nonce}, maxFee=${ethers.utils.formatUnits(maxFee, 'gwei')} gwei)...`);
+  console.log(`\nSending swap tx (nonce=${nonce}, baseFee=${ethers.utils.formatUnits(baseFee,'gwei')} maxFee=${ethers.utils.formatUnits(maxFee,'gwei')} gwei)...`);
   const tx = await router.swapExactTokensForTokens(
     amountInRaw,
     minWethOut,
     [USDC_NATIVE, WETH],
     wallet.address,
     deadline,
-    { gasLimit: 300000, gasPrice: maxFee, nonce }
+    { gasLimit: 800000, maxFeePerGas: maxFee, maxPriorityFeePerGas: priority, nonce }
   );
 
   console.log('🚀 TX SENT:', tx.hash);
