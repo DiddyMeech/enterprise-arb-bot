@@ -21,6 +21,24 @@ const {
 
 const CHAIN_ID_ARBITRUM = "0xa4b1";
 
+const CHAIN_NAMES = {
+  "0x1":    "ethereum",
+  "0x89":   "polygon",
+  "0xa4b1": "arbitrum",
+  "0xa":    "optimism",
+  "0x2105": "base",
+  "0x38":   "bsc",
+  "0xa86a": "avalanche",
+  "0x144":  "zksync",
+  "0x1388": "mantle",
+  "0xe708": "linea",
+  "0x171":  "solana_wrapper",
+};
+
+function chainName(hexId) {
+  return CHAIN_NAMES[String(hexId).toLowerCase()] || hexId;
+}
+
 const SOURCE_FILES = [
   "/home/meech/Desktop/enterprise-arb-bot/titan_auto_hunter/brain/loot_and_logs/Uncategorized/WEB3_RPC_NODES/VALID_HITS.md",
   "/home/meech/Desktop/enterprise-arb-bot/titan_auto_hunter/brain/loot_and_logs/Uncategorized/WEB3_DATA_APIS/VALID_HITS.md",
@@ -151,21 +169,25 @@ async function probeEndpoint(url, timeoutMs) {
   const provider = providerTag(url);
   const chain = await rpcCall(url, "eth_chainId", [], timeoutMs);
   if (!chain.ok) {
-    // Distinguish rate-limited/auth-failed from truly dead
     const skipReason = ["RATE_LIMITED", "CAPACITY_EXCEEDED", "AUTH_FAILED"].includes(chain.error)
       ? chain.error
       : `chainId: ${chain.error}`;
-    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: skipReason, status: chain.status };
+    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: skipReason, status: chain.status, detectedChain: null };
   }
-  if (String(chain.result).toLowerCase() !== CHAIN_ID_ARBITRUM) {
-    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: `wrong_chain:${chain.result}`, status: chain.status };
+
+  const detectedChain = chainName(chain.result);
+  const isArbitrum = String(chain.result).toLowerCase() === CHAIN_ID_ARBITRUM;
+
+  if (!isArbitrum) {
+    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: `wrong_chain:${chain.result}`, status: chain.status, detectedChain };
   }
+
   const block = await rpcCall(url, "eth_blockNumber", [], timeoutMs);
-  if (!block.ok) return { url, provider, ok: false, latencyMs: Math.max(chain.elapsedMs, block.elapsedMs), reason: `block: ${block.error}`, status: block.status };
+  if (!block.ok) return { url, provider, ok: false, latencyMs: Math.max(chain.elapsedMs, block.elapsedMs), reason: `block: ${block.error}`, status: block.status, detectedChain };
   const gas = await rpcCall(url, "eth_gasPrice", [], timeoutMs);
   const latestBlockNumber = blockNumberHexToInt(block.result);
   const latencyMs = Math.max(chain.elapsedMs, block.elapsedMs, gas.elapsedMs || 0);
-  return { url, provider, ok: true, latencyMs, latestBlockNumber, gasOk: gas.ok, reason: gas.ok ? "ok" : `gas: ${gas.error}` };
+  return { url, provider, ok: true, latencyMs, latestBlockNumber, gasOk: gas.ok, reason: gas.ok ? "ok" : `gas: ${gas.error}`, detectedChain };
 }
 
 function getReferenceBlock(healthyResults) {
@@ -320,6 +342,19 @@ async function main() {
     byReason[key] = (byReason[key] || 0) + 1;
   }
 
+  // Build multi-chain inventory from wrong_chain results
+  const chainInventory = {};
+  for (const r of rawResults) {
+    if (!r.detectedChain) continue;
+    if (!chainInventory[r.detectedChain]) {
+      chainInventory[r.detectedChain] = { healthy: 0, urls: [] };
+    }
+    if (r.ok || (r.detectedChain && r.detectedChain !== 'null')) {
+      chainInventory[r.detectedChain].healthy++;
+      chainInventory[r.detectedChain].urls.push(r.url);
+    }
+  }
+
   console.log(JSON.stringify({
     ok: true,
     selected: lanes.selected,
@@ -327,6 +362,7 @@ async function main() {
     lowInventory: lanes.lowInventory,
     referenceBlock: lanes.referenceBlock,
     failureBreakdown: byReason,
+    chainInventory,
   }, null, 2));
 
   if (lanes.lowInventory.quote || lanes.lowInventory.sim || lanes.lowInventory.send) {
