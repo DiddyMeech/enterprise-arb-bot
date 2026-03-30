@@ -1,26 +1,32 @@
-require("dotenv").config();
+require('dotenv').config();
+require('@nomicfoundation/hardhat-toolbox');
 
-/**
- * @type import('hardhat/config').HardhatUserConfig
- */
+const arbitrumRpc =
+  (process.env.ARBITRUM_SEND_RPC_URLS || '').split(',').map(v => v.trim()).filter(Boolean)[0] ||
+  process.env.ARBITRUM_RPC_URL ||
+  '';
+
 module.exports = {
   solidity: {
-    version: "0.8.20",
+    version: '0.8.20',
     settings: {
       optimizer: {
         enabled: true,
-        runs: 1 // Crucial: Minimized to compress bytecode size and bypass the L2 inflation bug
+        runs: 500
       }
     }
   },
   networks: {
     arbitrum: {
-      url: process.env.ARB_RPC_EXEC || "https://arb1.arbitrum.io/rpc",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
-    },
-    base: {
-      url: process.env.BASE_RPC_EXEC || "https://mainnet.base.org",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+      url: arbitrumRpc,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      chainId: 42161
     }
+  },
+  paths: {
+    sources: './contracts',
+    tests: './test',
+    cache: './cache',
+    artifacts: './artifacts'
   }
 };
