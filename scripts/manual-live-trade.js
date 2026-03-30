@@ -164,10 +164,12 @@ async function main() {
   const gasCostEth = ethers.utils.formatEther(gasEstimate.mul(gasPrice));
   console.log(`  estimated gas: ${gasEstimate.toString()} units @ ${ethers.utils.formatUnits(gasPrice, 'gwei')} gwei = ${gasCostEth} ETH`);
 
+  const nonce = await provider.getTransactionCount(wallet.address, 'pending');
   const tx = await wallet.sendTransaction({
     to: plan.target,
     data: plan.calldata,
     gasLimit: gasEstimate.mul(120).div(100), // +20% buffer
+    nonce,
   });
 
   console.log('\n🚀 TX SENT:', tx.hash);
