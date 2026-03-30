@@ -34,7 +34,10 @@
     "validate:camelot": "npm run build && node scripts/validate-camelot-route.js",
     "deploy:flash": "npx hardhat run scripts/deploy-flash-arb.js --network arbitrum",
     "whitelist:flash": "npx hardhat run scripts/whitelist-flash-arb.js --network arbitrum",
-    "dryrun:flash": "node scripts/dry-run-flash-sim.js"
+    "dryrun:flash": "node scripts/dry-run-flash-sim.js",
+    "rpc:harvest": "node scripts/rpc/harvest-rpc-pool.js",
+    "rpc:alert": "node scripts/rpc/rpc-alert.js",
+    "rpc:daemon": "node scripts/rpc/rpc-health-daemon.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

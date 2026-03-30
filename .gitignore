@@ -46,3 +46,7 @@ typechain-types/
 
 # Temporary
 /tmp/
+
+# RPC runtime outputs
+runtime/rpc/
+
