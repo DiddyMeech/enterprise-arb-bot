@@ -142,6 +142,8 @@ function serializeLane(list, limit) {
   return list.slice(0, limit).map((x) => x.url).join(",");
 }
 
+const CONCURRENCY = Number(process.env.RPC_PROBE_CONCURRENCY || 30);
+
 async function main() {
   const state = loadState();
 
@@ -151,18 +153,35 @@ async function main() {
 
   if (!urls.length) throw new Error("No candidate RPC URLs found in source files.");
 
-  const rawResults = [];
-  for (const url of urls) {
+  const toProbe = urls.filter((url) => {
     const st = state.endpoints[url];
-    if (st?.disabled) continue;
-    if (st && isQuarantined(st)) continue;
-    const result = await probeEndpoint(url, QUOTE_TIMEOUT_MS);
-    updateEndpointState(state, result, {
-      quarantineAfterFailures: QUARANTINE_AFTER_FAILURES,
-      baseCooldownMs: QUARANTINE_BASE_MS,
-    });
-    rawResults.push(result);
+    return !st?.disabled && !(st && isQuarantined(st));
+  });
+
+  console.error(`[rpc-harvest] probing ${toProbe.length}/${urls.length} candidates (concurrency=${CONCURRENCY})...`);
+
+  const rawResults = [];
+  let done = 0;
+  let i = 0;
+
+  async function worker() {
+    while (i < toProbe.length) {
+      const url = toProbe[i++];
+      const result = await probeEndpoint(url, QUOTE_TIMEOUT_MS);
+      updateEndpointState(state, result, {
+        quarantineAfterFailures: QUARANTINE_AFTER_FAILURES,
+        baseCooldownMs: QUARANTINE_BASE_MS,
+      });
+      rawResults.push(result);
+      done++;
+      if (done % 100 === 0) {
+        console.error(`[rpc-harvest] ${done}/${toProbe.length} probed, ${rawResults.filter(r => r.ok).length} healthy so far...`);
+      }
+    }
   }
+
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, toProbe.length) }, worker));
+  console.error(`[rpc-harvest] done. ${rawResults.filter(r => r.ok).length} healthy out of ${rawResults.length} probed.`);
 
   const healthy = rawResults.filter((r) => r.ok);
   const referenceBlock = getReferenceBlock(healthy);
