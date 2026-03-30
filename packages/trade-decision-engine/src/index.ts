@@ -8,6 +8,35 @@ export { EXECUTOR_ABI, EXECUTOR_IFACE, encodeExecutorCall, ExecutorMode, getExec
 export { getCodeInfo, extractSelector, safeErrorString, decodeCommonRevert, buildSimFailureReport } from "./sim-debug";
 export { normalizeRoute, RawRouteLegInput, RawRouteInput } from "./route-normalizer";
 export { encodeDexLeg, SupportedDex, NormalizedDexLeg, EncodedDexLeg } from "./dex-encoders";
+export {
+  RouteCandidate,
+  ChainName,
+  DexName,
+  RouteGuardResult,
+  RouteGuardReason,
+  getPairKey,
+  getRouteKey,
+  guardRouteCandidate,
+  scoreRouteCandidate,
+} from "./route-priority";
+export {
+  CamelotConfig,
+  validateCamelotConfig,
+  shouldEnableCamelotRoute,
+  getCamelotConfigFromEnv,
+} from "./camelot-guard";
+export { routeFamilyKey } from "./route-family-key";
+export {
+  ShadowRouteTracker,
+  ShadowRouteStats,
+  RankedRouteStats,
+  ShadowStatsSnapshot,
+  RouteFamilyKey,
+} from "./shadow-route-stats";
+export { printShadowRouteRanking } from "./shadow-route-report";
+export * from "./live-gate-config";
+export * from "./live-enable-gate";
+export * from "./live-gate-log";
 
 // Shim for legacy js callers — errors are re-thrown so callers get real stack traces
 export const evaluatePipeline = async (opp: any, simulatorCB: any, executionCB: any) => {

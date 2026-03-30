@@ -22,7 +22,11 @@ export type LogEvent =
   | "EXECUTE_CONFIRMED"
   | "EXECUTE_REVERTED"
   | "LEARN_UPDATE"
-  | "SYSTEM_STARTUP";
+  | "SYSTEM_STARTUP"
+  | "SHADOW_ROUTE_RANKING"
+  | "LIVE_GATE_PASS"
+  | "LIVE_GATE_BLOCK"
+  | "EXECUTE_BLOCKED_BY_LIVE_GATE";
 
 export type LogContext = {
   chain?: string;

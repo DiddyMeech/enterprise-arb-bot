@@ -30,7 +30,8 @@
     "start:overseer": "node apps/overseer/index.js",
     "deploy:base": "node scripts/deploy.js base",
     "deploy:arb": "node scripts/deploy.js arbitrum",
-    "deploy:op": "node scripts/deploy.js op"
+    "deploy:op": "node scripts/deploy.js op",
+    "validate:camelot": "npm run build && node scripts/validate-camelot-route.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

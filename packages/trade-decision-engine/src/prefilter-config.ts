@@ -19,6 +19,12 @@ export const PREFILTER_CONFIG = {
   ALLOWED_DEX_COMBOS: new Set([
     'sushi->univ3',
     'univ3->sushi',
+    // Tier-2: Camelot ↔ UniV3  (enabled once CAMELOT_ENABLED=true + valid router)
+    'camelot->univ3',
+    'univ3->camelot',
+    // Tier-3: Camelot ↔ Sushi  (enabled last, lower priority)
+    'sushi->camelot',
+    'camelot->sushi',
   ]),
 
   DISABLE_SAME_DEX_ARB: true,

@@ -2,6 +2,11 @@
 
 import { prefilterOpportunity } from './opportunity-prefilter';
 import { logSkip } from './log-skip';
+import { ShadowRouteTracker } from './shadow-route-stats';
+import { routeFamilyKey } from './route-family-key';
+import { printShadowRouteRanking } from './shadow-route-report';
+import { evaluateLiveEnablement } from './live-enable-gate';
+import { logLiveGate } from './live-gate-log';
 
 import {
   Opportunity,
@@ -124,9 +129,13 @@ export class ChainWorkerQueue {
   }
 }
 
+/** How often (ms) to print the shadow route ranking table. Default: 5 min. */
+const SHADOW_RANK_INTERVAL_MS = 5 * 60 * 1000;
+
 export class ArbOrchestrator {
   private readonly logger: EngineLogger;
   private readonly memory = new RouteMemory();
+  private readonly shadowTracker = new ShadowRouteTracker();
 
   private readonly queues: Record<ChainName, ChainWorkerQueue>;
   private readonly quarantine = new Map<RouteKey, RouteQuarantineEntry>();
@@ -179,6 +188,18 @@ export class ArbOrchestrator {
       }, this.cfg.flashLoanPremiumRefreshMs);
     }
 
+    // Shadow route ranking — print scoreboard every SHADOW_RANK_INTERVAL_MS in shadow mode
+    if (this.cfg.mode === "shadow") {
+      setInterval(() => {
+        const ranked = this.shadowTracker.ranked();
+        printShadowRouteRanking(
+          { info: (msg) => this.logger.info("SHADOW_ROUTE_RANKING", { table: msg }) },
+          ranked,
+          12,
+        );
+      }, SHADOW_RANK_INTERVAL_MS);
+    }
+
     // Auto-reset any tripped circuit breakers after circuitResetMs cooldown
     const resetMs = this.cfg.circuitResetMs ?? 5 * 60 * 1000;
     setInterval(() => {
@@ -193,6 +214,22 @@ export class ArbOrchestrator {
   }
 
   submitOpportunity(opp: Opportunity) {
+    const family = routeFamilyKey({
+      dexBuy:  opp.dexBuy,
+      dexSell: opp.dexSell,
+      tokenIn: opp.tokenIn,
+      tokenOut: opp.tokenOut,
+    });
+
+    // Track every incoming opportunity before any filtering
+    this.shadowTracker.seenRoute({
+      routeFamily:    family,
+      divergenceBps:  opp.estimatedPriceImpactBps,
+      grossProfitUsd: opp.quotedGrossProfitUsd,
+      gasUsd:         opp.estimatedGasUsd,
+      nowMs:          this.now(),
+    });
+
     // Run structured prefilter before queuing — rejects junk before simulation
     const pf = prefilterOpportunity({
       id: opp.id,
@@ -211,6 +248,7 @@ export class ArbOrchestrator {
     });
 
     if (!pf.ok) {
+      this.shadowTracker.prefilterReject(family, pf.reason);
       logSkip(this.logger, {
         reason: pf.reason,
         opportunityId: opp.id,
@@ -224,6 +262,7 @@ export class ArbOrchestrator {
       return;
     }
 
+    this.shadowTracker.prefilterPass(family);
     this.logger.info('PREFILTER_PASS', {
       opportunityId: opp.id,
       chain: opp.chain,
@@ -336,12 +375,20 @@ export class ArbOrchestrator {
       details: evaluation.diagnostics as Record<string, unknown> | undefined,
     });
 
+    const family = routeFamilyKey({
+      dexBuy:  opp.dexBuy,
+      dexSell: opp.dexSell,
+      tokenIn: opp.tokenIn,
+      tokenOut: opp.tokenOut,
+    });
+
     if (!evaluation.ok) {
       const classified = classifyFailure({
         phase: "simulate",
         reason: evaluation.reason,
       });
 
+      this.shadowTracker.simFail(family, classified.failure);
       this.logger.warn("SIM_FAIL", {
         chain: opp.chain,
         opportunityId: opp.id,
@@ -355,6 +402,8 @@ export class ArbOrchestrator {
       return;
     }
 
+    this.shadowTracker.simPass(family);
+
     if ((evaluation.score ?? 0) < this.cfg.minScoreToSend) {
       this.logger.info("PREFILTER_REJECT", {
         chain: opp.chain,
@@ -366,6 +415,7 @@ export class ArbOrchestrator {
     }
 
     if (this.cfg.mode === "shadow") {
+      this.shadowTracker.wouldExecute(family, this.now());
       this.logger.info("EXECUTE_ATTEMPT", {
         chain: opp.chain,
         opportunityId: opp.id,
@@ -386,6 +436,60 @@ export class ArbOrchestrator {
 
   private async sendAndTrack(candidate: ExecutionCandidate) {
     const { evaluation, rawOpportunity: opp } = candidate;
+
+    const family = routeFamilyKey({
+      dexBuy:  opp.dexBuy,
+      dexSell: opp.dexSell,
+      tokenIn: opp.tokenIn,
+      tokenOut: opp.tokenOut,
+    });
+
+    const liveGate = evaluateLiveEnablement({
+      candidate: {
+        chain:         opp.chain,
+        tokenIn:       opp.tokenIn,
+        tokenOut:      opp.tokenOut,
+        dexBuy:        opp.dexBuy,
+        dexSell:       opp.dexSell,
+        routeHash:     (evaluation.diagnostics as any)?.routeHash,
+        priorityScore: evaluation.score,
+        netProfitUsd:  evaluation.netProfitUsd,
+      },
+      rankedShadowRoutes: this.shadowTracker.ranked(),
+    });
+
+    const gateLogger = {
+      info: (event: string, payload?: Record<string, unknown>) => 
+        this.logger.info(event as import("./logger").LogEvent, payload)
+    };
+
+    if (!liveGate.ok) {
+      logLiveGate(gateLogger, {
+        ok:            false,
+        reason:        liveGate.reason,
+        opportunityId: opp.id,
+        routeHash:     (evaluation.diagnostics as any)?.routeHash,
+        routeFamily:   family,
+        details:       liveGate.details,
+      });
+
+      // Register the block as an intent failure so we don't spin on it
+      this.logger.warn("EXECUTE_BLOCKED_BY_LIVE_GATE", {
+        chain: opp.chain,
+        opportunityId: opp.id,
+        reason: liveGate.reason,
+      });
+      return;
+    }
+
+    logLiveGate(gateLogger, {
+      ok:            true,
+      reason:        liveGate.reason,
+      opportunityId: opp.id,
+      routeHash:     (evaluation.diagnostics as any)?.routeHash,
+      routeFamily:   family,
+      details:       liveGate.details,
+    });
 
     this.logger.info("EXECUTE_ATTEMPT", {
       chain: opp.chain,
