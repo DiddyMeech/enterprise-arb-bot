@@ -44,8 +44,55 @@ function extractUrls(text) {
   return [...new Set((text.match(/https?:\/\/[^\s<>"'`)\]]+/g) || []).map((x) => x.trim()))];
 }
 
+const BLOCKED_DOMAINS = [
+  "github.com", "raw.githubusercontent.com", "gist.github.com",
+  "google.com", "stackoverflow.com", "medium.com", "twitter.com",
+  "discord.com", "discord.gg", "t.me", "reddit.com",
+  "npmjs.com", "pypi.org", "pkg.go.dev",
+  "etherscan.io", "arbiscan.io", "polygonscan.com", "bscscan.com",
+  "docs.", "blog.", "forum.", "explorer.",
+  "ipfs.io", "cloudflare-ipfs.com",
+  "youtube.com", "youtu.be",
+];
+
+const RPC_DOMAINS = [
+  "alchemy.com", "infura.io", "quicknode.pro", "quiknode.pro",
+  "ankr.com", "blockpi.network", "drpc.org", "blastapi.io",
+  "llamarpc.com", "nodereal.io", "chainstack.com", "getblock.io",
+  "nownodes.io", "pokt.network", "moralis.io", "publicnode.com",
+  "arbitrum.io", "rpc.arb", "arb-mainnet", "arb1.",
+  "rpc.ankr.com", "rpc.blxrbdn.com", "rpc.particle.network",
+  "gateway.tenderly.co", "omniatech.io", "1rpc.io",
+];
+
 function looksRpcCandidate(url) {
-  return url.startsWith("http");
+  if (!url.startsWith("http")) return false;
+
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  for (const blocked of BLOCKED_DOMAINS) {
+    if (hostname.includes(blocked) || url.toLowerCase().includes(blocked)) return false;
+  }
+
+  for (const rpc of RPC_DOMAINS) {
+    if (url.toLowerCase().includes(rpc)) return true;
+  }
+
+  // Accept if path looks like an API key endpoint (long hex/alphanum segment)
+  try {
+    const { pathname } = new URL(url);
+    if (/\/v[23]?\/[a-f0-9]{20,}/i.test(pathname)) return true;
+    if (/\/[a-zA-Z0-9_-]{24,}/.test(pathname)) return true;
+  } catch {
+    return false;
+  }
+
+  return false;
 }
 
 function providerTag(url) {
