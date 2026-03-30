@@ -126,6 +126,16 @@ async function rpcCall(url, method, params = [], timeoutMs = 2500) {
     try { json = JSON.parse(text); } catch {
       return { ok: false, elapsedMs, error: "Non-JSON response", status: res.status };
     }
+    if (res.status === 429 || (json?.error?.code === 429)) {
+      return { ok: false, elapsedMs, error: "RATE_LIMITED", status: 429 };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, elapsedMs, error: "AUTH_FAILED", status: res.status };
+    }
+    const errMsg = json?.error?.message || "";
+    if (/capacity|limit exceeded|quota/i.test(errMsg)) {
+      return { ok: false, elapsedMs, error: "CAPACITY_EXCEEDED", status: res.status };
+    }
     if (!res.ok || json.error) {
       return { ok: false, elapsedMs, error: json?.error?.message || `HTTP ${res.status}`, status: res.status };
     }
@@ -140,12 +150,18 @@ async function rpcCall(url, method, params = [], timeoutMs = 2500) {
 async function probeEndpoint(url, timeoutMs) {
   const provider = providerTag(url);
   const chain = await rpcCall(url, "eth_chainId", [], timeoutMs);
-  if (!chain.ok) return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: `chainId: ${chain.error}` };
+  if (!chain.ok) {
+    // Distinguish rate-limited/auth-failed from truly dead
+    const skipReason = ["RATE_LIMITED", "CAPACITY_EXCEEDED", "AUTH_FAILED"].includes(chain.error)
+      ? chain.error
+      : `chainId: ${chain.error}`;
+    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: skipReason, status: chain.status };
+  }
   if (String(chain.result).toLowerCase() !== CHAIN_ID_ARBITRUM) {
-    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: `wrong chain ${chain.result}` };
+    return { url, provider, ok: false, latencyMs: chain.elapsedMs, reason: `wrong_chain:${chain.result}`, status: chain.status };
   }
   const block = await rpcCall(url, "eth_blockNumber", [], timeoutMs);
-  if (!block.ok) return { url, provider, ok: false, latencyMs: Math.max(chain.elapsedMs, block.elapsedMs), reason: `block: ${block.error}` };
+  if (!block.ok) return { url, provider, ok: false, latencyMs: Math.max(chain.elapsedMs, block.elapsedMs), reason: `block: ${block.error}`, status: block.status };
   const gas = await rpcCall(url, "eth_gasPrice", [], timeoutMs);
   const latestBlockNumber = blockNumberHexToInt(block.result);
   const latencyMs = Math.max(chain.elapsedMs, block.elapsedMs, gas.elapsedMs || 0);
@@ -298,12 +314,19 @@ async function main() {
     `${nowIso()} [rpc-harvest-v2] quote=${quote.length} sim=${sim.length} send=${send.length}`
   );
 
+  const byReason = {};
+  for (const r of rawResults.filter(x => !x.ok)) {
+    const key = r.reason?.split(':')[0] || 'unknown';
+    byReason[key] = (byReason[key] || 0) + 1;
+  }
+
   console.log(JSON.stringify({
     ok: true,
     selected: lanes.selected,
     counts: lanes.counts,
     lowInventory: lanes.lowInventory,
     referenceBlock: lanes.referenceBlock,
+    failureBreakdown: byReason,
   }, null, 2));
 
   if (lanes.lowInventory.quote || lanes.lowInventory.sim || lanes.lowInventory.send) {
