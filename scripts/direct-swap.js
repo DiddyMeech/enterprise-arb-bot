@@ -76,8 +76,10 @@ async function main() {
   // ── Swap ──────────────────────────────────────────────────────────────────
   const deadline  = Math.floor(Date.now() / 1000) + 120;
   const nonce     = await provider.getTransactionCount(wallet.address, 'pending');
-  // 2× current gas price guarantees tx lands even if baseFee spikes between poll and inclusion
-  const maxFee    = (await provider.getGasPrice()).mul(2);
+  // Read actual baseFee from latest block — most reliable on Arbitrum
+  const block   = await provider.getBlock('latest');
+  const baseFee = block.baseFeePerGas || ethers.utils.parseUnits('0.1', 'gwei');
+  const maxFee  = baseFee.mul(150).div(100); // 1.5× baseFee — guaranteed to land
 
   console.log(`\nSending swap tx (nonce=${nonce}, maxFee=${ethers.utils.formatUnits(maxFee, 'gwei')} gwei)...`);
   const tx = await router.swapExactTokensForTokens(
