@@ -88,15 +88,17 @@ async function scanChain({ chainKey, nativeTokenUsd }) {
     const chain = getChain(chainKey);
     const rpcManager = RpcManager.fromEnv(chainKey);
 
-    const quote = await rpcManager.withProvider('quote', async (provider) => {
-      return getOptimalQuote({
-        chainKey,
-        provider,
-        tokenInSymbol: 'USDC',
-        tokenOutSymbol: 'WETH',
-        amountInUsd: THRESHOLDS.tradeUsdHint,
-        nativeTokenUsd
-      });
+    // Get a bare provider — multi-venue scan makes 180+ RPC calls and
+    // needs more than the 3500ms withProvider quote-lane cap allows
+    const provider = await rpcManager.getProvider('quote', 5000);
+
+    const quote = await getOptimalQuote({
+      chainKey,
+      provider,
+      tokenInSymbol: 'USDC',
+      tokenOutSymbol: 'WETH',
+      amountInUsd: THRESHOLDS.tradeUsdHint,
+      nativeTokenUsd
     });
 
     if (!quote.ok || !quote.bestRoute) return;
