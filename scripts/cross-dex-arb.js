@@ -75,7 +75,66 @@ async function ensureApproved(tokenContract, spender, amount, wallet) {
     console.log(`  Approving ${spender.slice(0,10)}...`);
     const tx = await tokenContract.approve(spender, amount, { gasLimit: 100000 });
     await tx.wait();
-    console.log('  ✅ Approved');
+    console.log('  \u2705 Approved');
+  }
+}
+
+// ── Compact multi-size preview table ────────────────────────────────────────
+function pad(str, width) {
+  const s = String(str);
+  return s.length >= width ? s.slice(0, width) : s + ' '.repeat(width - s.length);
+}
+function fmtUsd(n) {
+  const sign = n >= 0 ? '' : '-';
+  return `${sign}$${Math.abs(n).toFixed(4)}`;
+}
+
+async function previewRouteSizesTable(sushi, quoter, buyOnSushi, gasCostUsd) {
+  const TEST_SIZES = [5, 50, 500];
+  const rows = [];
+
+  for (const size of TEST_SIZES) {
+    try {
+      const amtIn = ethers.utils.parseUnits(String(size), 6);
+      let leg1WethOut, leg2UsdcOut;
+
+      if (buyOnSushi) {
+        const sa = await sushi.getAmountsOut(amtIn, [USDC, WETH]);
+        leg1WethOut = sa[1];
+        const usdcOut = await quoter.callStatic.quoteExactInputSingle(WETH, USDC, POOL_FEE, leg1WethOut, 0);
+        leg2UsdcOut = parseFloat(ethers.utils.formatUnits(usdcOut, 6));
+      } else {
+        const uniOut = await quoter.callStatic.quoteExactInputSingle(USDC, WETH, POOL_FEE, amtIn, 0);
+        leg1WethOut = uniOut;
+        const sa2 = await sushi.getAmountsOut(leg1WethOut, [WETH, USDC]);
+        leg2UsdcOut = parseFloat(ethers.utils.formatUnits(sa2[1], 6));
+      }
+
+      const grossUsd = leg2UsdcOut - size;
+      const netUsd   = grossUsd - gasCostUsd;
+      let status = netUsd >= MIN_NET_PROFIT_USD ? 'PASS' : grossUsd <= 0 ? 'NEG_GROSS' : netUsd <= 0 ? 'NEG_AFTER_GAS' : 'BELOW_THRESHOLD';
+
+      rows.push({
+        size, status,
+        leg1:  parseFloat(ethers.utils.formatEther(leg1WethOut)).toFixed(12),
+        leg2:  leg2UsdcOut.toFixed(6),
+        gross: fmtUsd(grossUsd),
+        gas:   fmtUsd(gasCostUsd),
+        net:   fmtUsd(netUsd),
+      });
+    } catch(err) {
+      rows.push({ size, status: 'QUOTE_ERR', leg1:'ERR', leg2:'ERR', gross:'ERR', gas: fmtUsd(gasCostUsd), net:'ERR' });
+    }
+  }
+
+  const H = [['Size',10],['Leg1 WETH',18],['Leg2 USDC',16],['Gross',12],['Gas',10],['Net',12],['Status',16]];
+  console.log('\n\u2500\u2500 Multi-Size Preview (real quotes) \u2500\u2500');
+  console.log(H.map(([h,w]) => pad(h,w)).join(' | '));
+  console.log(H.map(([,w]) => '-'.repeat(w)).join('-|-'));
+  for (const r of rows) {
+    const emoji = r.status === 'PASS' ? '\u2705' : '\u274c';
+    console.log([pad(`${r.size} USDC`,10), pad(r.leg1,18), pad(r.leg2,16),
+      pad(r.gross,12), pad(r.gas,10), pad(r.net,12), pad(`${emoji} ${r.status}`,16)].join(' | '));
   }
 }
 
@@ -145,14 +204,8 @@ async function main() {
   const netProfit   = grossProfit - gasCostUsd;
   const routeHash   = buyOnSushi ? 'sushi→univ3' : 'univ3→sushi';
 
-  // Size-scale preview (no execution)
-  const profitPerUsd = grossProfit / amountUSDC; // bps as fraction
-  console.log('\n── Size-Scale Preview (no execution) ──');
-  for (const size of [5, 50, 500]) {
-    const g = size * profitPerUsd;
-    const n = g - gasCostUsd;
-    console.log(`  $${String(size).padStart(5)} USDC → gross $${g.toFixed(4).padStart(8)} | net $${n.toFixed(4).padStart(8)} ${n >= MIN_NET_PROFIT_USD ? '✅' : '❌'}`);
-  }
+  // ── Multi-size real quotes preview (diagnostic, no execution) ────────────
+  await previewRouteSizesTable(sushi, quoter, buyOnSushi, gasCostUsd);
 
   console.log('\n── Profitability ──');
   console.log(`  Route:      ${routeHash}`);
@@ -163,11 +216,15 @@ async function main() {
   console.log(`  Net:        $${netProfit.toFixed(6)}`);
 
   if (grossProfit <= 0) {
-    console.log('\n⚠️  SKIP — cross-DEX round trip not profitable after return leg (fees exceed spread).');
+    console.log('\n\u26a0\ufe0f  SKIP \u2014 cross-DEX round trip not profitable after return leg (fees exceed spread).');
+    return;
+  }
+  if (netProfit <= 0) {
+    console.log(`\n\u26a0\ufe0f  SKIP \u2014 positive gross ($${grossProfit.toFixed(4)}) but negative after gas.`);
     return;
   }
   if (netProfit < MIN_NET_PROFIT_USD) {
-    console.log(`\n⚠️  SKIP — net $${netProfit.toFixed(4)} below threshold $${MIN_NET_PROFIT_USD}. Increase trade size or wait for larger spread.`);
+    console.log(`\n\u26a0\ufe0f  SKIP \u2014 positive net (${fmtUsd(netProfit)}) but below threshold $${MIN_NET_PROFIT_USD}. Increase size or wait for wider spread.`);
     return;
   }
 
