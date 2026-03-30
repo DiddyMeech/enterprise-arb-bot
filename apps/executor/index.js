@@ -1,46 +1,33 @@
-const { ethers } = require("ethers");
-const config = require("@arb/config");
-const { logger } = require("@arb/telemetry");
-const GasEngine = require("@arb/gas-engine");
-const TxRouter = require("@arb/tx-router");
-const MevRelay = require("@arb/mev");
-const { buildExecutionPlan } = require("@arb/trade-decision-engine");
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+
+const { ethers } = require('ethers');
+const config = require('@arb/config');
+const { getChain } = require('../../config/chains');
+const { RpcManager } = require('../../packages/rpc-manager');
+const {
+  buildExecutionPlan,
+  buildFlashExecutionPlan
+} = require('../../packages/execution-engine');
 
 class ExecutorApp {
-  constructor() {
-    this.gasEngines = new Map();
-    logger.info("[EXECUTOR] Booting executor service");
+  constructor({ logger = console } = {}) {
+    this.logger = logger;
   }
 
-  getChain(chainName) {
-    const chain = Object.values(config.CHAINS).find((c) => c.name === chainName);
-    if (!chain) throw new Error(`Unknown chain ${chainName}`);
-    return chain;
-  }
-
-  getGasEngine(chainName, seedGasPrice) {
-    if (!this.gasEngines.has(chainName)) {
-      this.gasEngines.set(
-        chainName,
-        new GasEngine(seedGasPrice || ethers.BigNumber.from(1), config)
-      );
-    }
-    return this.gasEngines.get(chainName);
+  getChain(chainKey) {
+    return getChain(chainKey);
   }
 
   async submitValidatedTrade(validationResult) {
-    const { payload, evaluation } = validationResult;
+    const { payload } = validationResult;
     const chain = this.getChain(payload.chain);
-
-    const { RpcManager } = require('../../packages/rpc-manager');
-    const {
-      buildExecutionPlan,
-      buildFlashExecutionPlan
-    } = require('../../packages/execution-engine');
-
     const rpcManager = RpcManager.fromEnv(payload.chain);
-    const provider = rpcManager.getProvider();
-    const wallet = new ethers.Wallet(config.PRIVATE_KEY, provider);
+
+    const provider = await rpcManager.getProvider('send');
+    const wallet = new ethers.Wallet(
+      process.env.PRIVATE_KEY || config.PRIVATE_KEY,
+      provider
+    );
 
     const useFlashMode =
       String(process.env.FLASH_LOAN_ENABLED || 'false').toLowerCase() === 'true';
@@ -51,11 +38,11 @@ class ExecutorApp {
 
     const route = {
       chain:             payload.chain,
-      tokenIn:           payload.tokenInAddress || payload.tokenIn,
-      tokenOut:          payload.tokenOutAddress || payload.tokenOut,
+      tokenIn:           payload.tokenInAddress || payload.routePlan.tokenIn || payload.tokenIn,
+      tokenOut:          payload.tokenOutAddress || payload.routePlan.tokenOut || payload.tokenOut,
       amountInRaw:       payload.routePlan.amountInRaw || payload.amountInRaw,
       minProfitTokenRaw: payload.routePlan.minProfitTokenRaw || '1',
-      deadline:          payload.routePlan.deadline || Math.floor(Date.now() / 1000) + 45,
+      deadline:          payload.routePlan.deadline,
       legs:              payload.routePlan.legs
     };
 
@@ -66,25 +53,18 @@ class ExecutorApp {
           route
         })
       : buildExecutionPlan({
-          executorAddress: chain.contractAddress || config.ARB_CONTRACT_ADDRESS,
+          executorAddress:
+            chain.executorAddress || process.env.ARB_CONTRACT_ADDRESS,
           route
         });
 
-    logger.info('[EXECUTOR] Plan ready', {
+    this.logger.info({
+      msg:    'executor.plan.ready',
       chain:  payload.chain,
-      mode:   executionPlan.type,
-      rpc:    provider.__rpcUrl,
+      mode:   useFlashMode ? 'flash' : 'standard',
+      rpc:    provider.__rpcMeta?.url || null,
       target: executionPlan.target
     });
-
-    if (config.SAFE_MODE) {
-      logger.warn('[SAFE MODE] Payload built but not broadcast', {
-        chain:  payload.chain,
-        mode:   executionPlan.type,
-        target: executionPlan.target
-      });
-      return { ok: true, status: 'SIMULATED_SUCCESS', execId: `dry_run_${Date.now()}` };
-    }
 
     const tx = await wallet.sendTransaction({
       to:       executionPlan.target,
@@ -92,12 +72,17 @@ class ExecutorApp {
       gasLimit: executionPlan.gasLimit
     });
 
-    logger.info('[EXECUTOR] TX submitted', { chain: payload.chain, mode: executionPlan.type, txHash: tx.hash });
+    this.logger.info({
+      msg:   'executor.tx.submitted',
+      chain: payload.chain,
+      mode:  useFlashMode ? 'flash' : 'standard',
+      txHash: tx.hash
+    });
 
     const receipt = await tx.wait();
-    rpcManager.markSuccess(provider.__rpcUrl);
 
-    logger.info('[EXECUTOR] TX confirmed', {
+    this.logger.info({
+      msg:     'executor.tx.confirmed',
       chain:   payload.chain,
       txHash:  tx.hash,
       status:  receipt.status,
@@ -106,8 +91,6 @@ class ExecutorApp {
 
     return { txHash: tx.hash, receipt };
   }
-
 }
 
-module.exports = new ExecutorApp();
-setInterval(() => {}, 60000);
+module.exports = { ExecutorApp };

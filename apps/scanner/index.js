@@ -1,11 +1,11 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
-const { ethers } = require('ethers');
 const { randomUUID } = require('crypto');
-const { getChain, makeProvider, getToken } = require('../../config/chains');
+const { getChain } = require('../../config/chains');
 const { THRESHOLDS } = require('../../config/thresholds');
 const { getOptimalQuote } = require('../../packages/quote-engine');
 const { evaluateRoute } = require('../../packages/risk-engine');
+const { RpcManager } = require('../../packages/rpc-manager');
 
 const dedupeCache = new Map();
 const DEDUPE_TTL_MS = 5000;
@@ -13,9 +13,7 @@ const DEDUPE_TTL_MS = 5000;
 function cleanupDedupe() {
   const now = Date.now();
   for (const [key, ts] of dedupeCache.entries()) {
-    if (now - ts > DEDUPE_TTL_MS) {
-      dedupeCache.delete(key);
-    }
+    if (now - ts > DEDUPE_TTL_MS) dedupeCache.delete(key);
   }
 }
 
@@ -27,16 +25,9 @@ function isDuplicate(key) {
 }
 
 function detectDirectionFromRoute(route) {
-  if (!route || !route.legs || route.legs.length < 2) {
-    return {
-      dexBuy: 'unknown',
-      dexSell: 'unknown'
-    };
-  }
-
   return {
-    dexBuy: route.legs[0].dex,
-    dexSell: route.legs[1].dex
+    dexBuy: route?.legs?.[0]?.dex || 'unknown',
+    dexSell: route?.legs?.[1]?.dex || 'unknown'
   };
 }
 
@@ -68,7 +59,7 @@ function normalizeOpportunity({ chainKey, route, nativeTokenUsd }) {
       tokenOut: route.tokenOut,
       amountInRaw: route.amountInRaw,
       expectedAmountOutRaw: route.expectedAmountOutRaw,
-      minProfitTokenRaw: '1',
+      minProfitTokenRaw: route.minProfitTokenRaw || '1',
       deadline: route.deadline,
       legs: route.legs
     }
@@ -81,77 +72,37 @@ function logOpportunity(opp) {
   console.log(`Pair:      ${opp.pair}`);
   console.log(`Buy Dex:   ${opp.dexBuy}`);
   console.log(`Sell Dex:  ${opp.dexSell}`);
-  console.log(`Gross USD: ${opp.quotedGrossProfitUsd.toFixed(6)}`);
-  console.log(`Gas USD:   ${opp.estimatedGasUsd.toFixed(6)}`);
-  console.log(`DEX Fees:  ${opp.dexFeesUsd.toFixed(6)}`);
-  console.log(`Net USD:   ${opp.netProfitUsd.toFixed(6)}`);
-  console.log(
-    `Leg 1:     ${opp.routePlan.legs[0].dex} ${opp.routePlan.legs[0].amountInRaw} -> ${opp.routePlan.legs[0].expectedOutRaw}`
-  );
-  console.log(
-    `Leg 2:     ${opp.routePlan.legs[1].dex} ${opp.routePlan.legs[1].amountInRaw} -> ${opp.routePlan.legs[1].expectedOutRaw}`
-  );
+  console.log(`Gross USD: ${Number(opp.quotedGrossProfitUsd).toFixed(6)}`);
+  console.log(`Gas USD:   ${Number(opp.estimatedGasUsd).toFixed(6)}`);
+  console.log(`DEX Fees:  ${Number(opp.dexFeesUsd).toFixed(6)}`);
+  console.log(`Net USD:   ${Number(opp.netProfitUsd).toFixed(6)}`);
+  console.log(`RPC Lane:  quote`);
 }
-
-const { buildExecutionPlan } = require('../../packages/execution-engine');
 
 async function submitOpportunity(opp) {
-  if (THRESHOLDS.safeMode) {
-    console.log(`[SAFE_MODE] Would execute: ${opp.id} | net=$${opp.netProfitUsd.toFixed(4)}`);
-    return;
-  }
-
-  try {
-    const provider = makeProvider(opp.chain);
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-    const executorAddress = process.env.ARB_CONTRACT_ADDRESS || getChain(opp.chain).executorAddress;
-
-    if (!executorAddress) {
-      console.error('[EXEC] No executor address configured — set ARB_CONTRACT_ADDRESS in .env');
-      return;
-    }
-
-    const plan = buildExecutionPlan({ executorAddress, route: opp.routePlan });
-
-    console.log(`[EXEC] Sending tx | id=${opp.id} | net=$${opp.netProfitUsd.toFixed(4)}`);
-
-    const tx = await wallet.sendTransaction({
-      to: plan.target,
-      data: plan.calldata,
-      gasLimit: plan.gasLimit
-    });
-
-    console.log(`[EXEC] TX HASH: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`[EXEC] ${receipt.status === 1 ? 'SUCCESS ✅' : 'REVERTED ❌'} block=${receipt.blockNumber}`);
-  } catch (err) {
-    console.error('[EXEC ERROR]', err.message);
-  }
+  console.log(`[shadow] submitOpportunity ${opp.id}`);
 }
-
 
 async function scanChain({ chainKey, nativeTokenUsd }) {
   try {
     const chain = getChain(chainKey);
-    const provider = makeProvider(chainKey);
+    const rpcManager = RpcManager.fromEnv(chainKey);
 
-    const quote = await getOptimalQuote({
-      chainKey,
-      provider,
-      tokenInSymbol: 'USDC',
-      tokenOutSymbol: 'WETH',
-      amountInUsd: THRESHOLDS.tradeUsdHint,
-      nativeTokenUsd
+    const quote = await rpcManager.withProvider('quote', async (provider) => {
+      return getOptimalQuote({
+        chainKey,
+        provider,
+        tokenInSymbol: 'USDC',
+        tokenOutSymbol: 'WETH',
+        amountInUsd: THRESHOLDS.tradeUsdHint,
+        nativeTokenUsd
+      });
     });
 
-    if (!quote.ok || !quote.bestRoute) {
-      return;
-    }
+    if (!quote.ok || !quote.bestRoute) return;
 
     const evaluation = evaluateRoute(quote.bestRoute);
-    if (!evaluation.ok) {
-      return;
-    }
+    if (!evaluation.ok) return;
 
     const route = quote.bestRoute;
     const direction = detectDirectionFromRoute(route);
@@ -166,18 +117,15 @@ async function scanChain({ chainKey, nativeTokenUsd }) {
       route.expectedAmountOutRaw
     ].join(':');
 
-    if (isDuplicate(dedupeKey)) {
-      return;
-    }
+    if (isDuplicate(dedupeKey)) return;
 
-    const opp = normalizeOpportunity({
-      chainKey,
-      route,
-      nativeTokenUsd
-    });
+    const opp = normalizeOpportunity({ chainKey, route, nativeTokenUsd });
 
     logOpportunity(opp);
     await submitOpportunity(opp);
+
+    const stats = rpcManager.stats().filter((s) => s.lane === 'quote');
+    console.log('[scanner.rpc.stats]', JSON.stringify(stats));
   } catch (error) {
     console.error(`[scanner:${chainKey}]`, error.message);
   }
@@ -192,16 +140,6 @@ async function main() {
 
   console.log('[scanner] activeChains=', activeChains.join(','));
   console.log('[scanner] pollIntervalMs=', THRESHOLDS.pollIntervalMs);
-  console.log('[scanner] tradeUsdHint=', THRESHOLDS.tradeUsdHint);
-  console.log('[scanner] safeMode=', THRESHOLDS.safeMode);
-
-  for (const chainKey of activeChains) {
-    try {
-      getChain(chainKey);
-    } catch (err) {
-      console.error(`[scanner] skipping unsupported chain ${chainKey}`);
-    }
-  }
 
   const tick = async () => {
     for (const chainKey of activeChains) {
@@ -220,7 +158,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = {
-  scanChain,
-  normalizeOpportunity
-};
+module.exports = { scanChain, normalizeOpportunity };

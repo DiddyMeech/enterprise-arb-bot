@@ -1,5 +1,12 @@
 const { ethers } = require('ethers');
 
+function splitCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
 const CHAINS = {
   arbitrum: {
     key: 'arbitrum',
@@ -9,11 +16,8 @@ const CHAINS = {
       process.env.RPC_URL_ARBITRUM ||
       process.env.ARB_RPC_URL ||
       '',
-    rpcs: String(process.env.ARBITRUM_RPC_URLS || process.env.ARBITRUM_RPC_URL || '')
-      .split(',').map((v) => v.trim()).filter(Boolean),
-    wss: String(process.env.ARBITRUM_WSS_URLS || '')
-      .split(',').map((v) => v.trim()).filter(Boolean),
-    explorerBaseUrl: 'https://arbiscan.io',
+    rpcs: splitCsv(process.env.ARBITRUM_RPC_URLS),
+    wss: splitCsv(process.env.ARBITRUM_WSS_URLS),
     executorAddress:
       process.env.ARBITRUM_EXECUTOR_ADDRESS ||
       process.env.ARB_CONTRACT_ADDRESS ||
@@ -22,6 +26,7 @@ const CHAINS = {
       process.env.ARBITRUM_FLASH_EXECUTOR_ADDRESS ||
       process.env.ARB_FLASH_EXECUTOR_ADDRESS ||
       '',
+    explorerBaseUrl: 'https://arbiscan.io',
     tokens: {
       USDC: {
         symbol: 'USDC',
@@ -50,95 +55,34 @@ const CHAINS = {
         feeBps: 5
       }
     }
-  },
-
-  base: {
-    key: 'base',
-    chainId: 8453,
-    rpcUrl:
-      process.env.BASE_RPC_URL ||
-      process.env.RPC_URL_BASE ||
-      '',
-    rpcs: String(process.env.BASE_RPC_URLS || process.env.BASE_RPC_URL || '')
-      .split(',').map((v) => v.trim()).filter(Boolean),
-    wss: String(process.env.BASE_WSS_URLS || '')
-      .split(',').map((v) => v.trim()).filter(Boolean),
-    explorerBaseUrl: 'https://basescan.org',
-    executorAddress:
-      process.env.BASE_EXECUTOR_ADDRESS ||
-      '',
-    flashExecutorAddress:
-      process.env.BASE_FLASH_EXECUTOR_ADDRESS ||
-      '',
-    tokens: {
-      USDC: {
-        symbol: 'USDC',
-        address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA',
-        decimals: 6
-      },
-      WETH: {
-        symbol: 'WETH',
-        address: '0x4200000000000000000000000000000000000006',
-        decimals: 18
-      }
-    },
-    dexes: {
-      sushi: {
-        key: 'sushi',
-        kind: 'v2',
-        router: '0x327Df1E6de05B9A098E56B0868f7b52044458dE7',
-        feeBps: 30
-      },
-      univ3: {
-        key: 'univ3',
-        kind: 'v3',
-        router: '0x2626664c2603336E57B271c5C0b26F421741e481',
-        quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-        fee: 500,
-        feeBps: 5
-      }
-    }
   }
 };
 
 function getChain(chainKey) {
   const chain = CHAINS[String(chainKey || '').toLowerCase()];
-  if (!chain) {
-    throw new Error(`Unsupported chain: ${chainKey}`);
-  }
+  if (!chain) throw new Error(`Unsupported chain: ${chainKey}`);
   return chain;
 }
 
 function getToken(chainKey, symbol) {
   const chain = getChain(chainKey);
   const token = chain.tokens[String(symbol || '').toUpperCase()];
-  if (!token) {
-    throw new Error(`Unsupported token ${symbol} on ${chainKey}`);
-  }
+  if (!token) throw new Error(`Unsupported token ${symbol} on ${chainKey}`);
   return token;
 }
 
 function getDex(chainKey, dexKey) {
   const chain = getChain(chainKey);
   const dex = chain.dexes[String(dexKey || '').toLowerCase()];
-  if (!dex) {
-    throw new Error(`Unsupported dex ${dexKey} on ${chainKey}`);
-  }
+  if (!dex) throw new Error(`Unsupported dex ${dexKey} on ${chainKey}`);
   return dex;
 }
 
 function makeProvider(chainKey) {
   const chain = getChain(chainKey);
-  if (!chain.rpcUrl) {
-    throw new Error(`Missing RPC URL for ${chainKey}`);
-  }
-  return new ethers.providers.JsonRpcProvider(chain.rpcUrl);
+  const url = chain.rpcUrl || chain.rpcs?.[0];
+  if (!url) throw new Error(`Missing RPC URL for ${chainKey}`);
+  return new ethers.providers.JsonRpcProvider(url);
 }
 
-module.exports = {
-  CHAINS,
-  getChain,
-  getToken,
-  getDex,
-  makeProvider
-};
+module.exports = { CHAINS, getChain, getToken, getDex, makeProvider };
