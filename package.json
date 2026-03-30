@@ -31,7 +31,10 @@
     "deploy:base": "node scripts/deploy.js base",
     "deploy:arb": "node scripts/deploy.js arbitrum",
     "deploy:op": "node scripts/deploy.js op",
-    "validate:camelot": "npm run build && node scripts/validate-camelot-route.js"
+    "validate:camelot": "npm run build && node scripts/validate-camelot-route.js",
+    "deploy:flash": "npx hardhat run scripts/deploy-flash-arb.js --network arbitrum",
+    "whitelist:flash": "npx hardhat run scripts/whitelist-flash-arb.js --network arbitrum",
+    "dryrun:flash": "node scripts/dry-run-flash-sim.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -46,6 +49,7 @@
   },
   "devDependencies": {
     "@aave/core-v3": "^1.19.3",
+    "@nomicfoundation/hardhat-toolbox": "^2.0.2",
     "hardhat": "^2.22.15"
   }
 }
