@@ -118,7 +118,9 @@ async function main() {
     ? parseFloat(ethers.utils.formatEther(wethBuyOut.sub(minWethOut).abs())) / parseFloat(ethers.utils.formatEther(minWethOut)) * 10000
     : 0;
 
-  console.log(`\n  Divergence: ${div.toFixed(1)} bps | Buy on: ${buyOnSushi ? 'Sushi' : 'UniV3'} (more WETH out)`);
+  console.log(`  Divergence: ${div.toFixed(1)} bps | Buy on: ${buyOnSushi ? 'Sushi' : 'UniV3'} (more WETH out)`);
+  console.log(`  Route hash: ${buyOnSushi ? 'sushi→univ3' : 'univ3→sushi'}`);
+  console.log(`  Sushi fee: 0.30% | UniV3 fee: 0.05%`);
 
   // ── Step 3: Quote leg 2 (sell side) using actual weth from buy leg ──────────
   const wethToSell = wethBuyOut;
@@ -141,20 +143,31 @@ async function main() {
   const gasCostUsd  = gasUsd(overrides.maxFeePerGas);
   const grossProfit = finalUsdcOut - amountUSDC;
   const netProfit   = grossProfit - gasCostUsd;
+  const routeHash   = buyOnSushi ? 'sushi→univ3' : 'univ3→sushi';
+
+  // Size-scale preview (no execution)
+  const profitPerUsd = grossProfit / amountUSDC; // bps as fraction
+  console.log('\n── Size-Scale Preview (no execution) ──');
+  for (const size of [5, 50, 500]) {
+    const g = size * profitPerUsd;
+    const n = g - gasCostUsd;
+    console.log(`  $${String(size).padStart(5)} USDC → gross $${g.toFixed(4).padStart(8)} | net $${n.toFixed(4).padStart(8)} ${n >= MIN_NET_PROFIT_USD ? '✅' : '❌'}`);
+  }
 
   console.log('\n── Profitability ──');
+  console.log(`  Route:      ${routeHash}`);
   console.log(`  Input:      $${amountUSDC.toFixed(6)} USDC`);
   console.log(`  Output:     $${finalUsdcOut.toFixed(6)} USDC`);
   console.log(`  Gross:      $${grossProfit.toFixed(6)}`);
-  console.log(`  Gas est:   ~$${gasCostUsd.toFixed(4)}`);
+  console.log(`  Gas est:   ~$${gasCostUsd.toFixed(4)} (${GAS_UNITS_APPROX.toLocaleString()} units @ ${ethers.utils.formatUnits(overrides.maxFeePerGas,'gwei')} gwei)`);
   console.log(`  Net:        $${netProfit.toFixed(6)}`);
 
   if (grossProfit <= 0) {
-    console.log('\n⚠️  SKIP — same-DEX/no-spread (gross <= 0). Market is efficient right now.');
+    console.log('\n⚠️  SKIP — cross-DEX round trip not profitable after return leg (fees exceed spread).');
     return;
   }
   if (netProfit < MIN_NET_PROFIT_USD) {
-    console.log(`\n⚠️  SKIP — net $${netProfit.toFixed(4)} < threshold $${MIN_NET_PROFIT_USD}. Not profitable after gas.`);
+    console.log(`\n⚠️  SKIP — net $${netProfit.toFixed(4)} below threshold $${MIN_NET_PROFIT_USD}. Increase trade size or wait for larger spread.`);
     return;
   }
 
