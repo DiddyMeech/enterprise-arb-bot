@@ -1,7 +1,12 @@
 /**
  * prefilter-config.ts
  * Centralised filter constants for the opportunity pre-filter.
+ *
+ * Set PREFILTER_DEBUG=1 in .env for looser thresholds (debug/visibility mode).
+ * Leave unset for production-strict mode.
  */
+
+const DEBUG_MODE = process.env.PREFILTER_DEBUG === '1';
 
 export const PREFILTER_CONFIG = {
   ENABLED_CHAINS: ['arbitrum'] as const,
@@ -18,15 +23,16 @@ export const PREFILTER_CONFIG = {
 
   DISABLE_SAME_DEX_ARB: true,
 
-  MIN_DIVERGENCE_BPS: 100,
-  MIN_GROSS_PROFIT_USD: 0.50,
-  MIN_NET_PROFIT_USD: 0.25,
-
-  MAX_GAS_TO_GROSS_RATIO: 0.50,
-  MAX_QUOTE_AGE_MS: 1200,
+  // ── Thresholds (debug=loose, production=strict) ──────────────────────────
+  MIN_DIVERGENCE_BPS:    DEBUG_MODE ? 60   : 100,
+  MIN_GROSS_PROFIT_USD:  DEBUG_MODE ? 0.25 : 0.50,
+  MIN_NET_PROFIT_USD:    DEBUG_MODE ? 0.10 : 0.25,
+  MAX_GAS_TO_GROSS_RATIO: DEBUG_MODE ? 0.6  : 0.50,
+  MAX_QUOTE_AGE_MS:      1200,
 
   MIN_POOL_LIQUIDITY_USD: 100_000,
-  MIN_24H_VOLUME_USD: 250_000,
+  MIN_24H_VOLUME_USD:     250_000,
 
   LOG_SKIPS: true,
+  DEBUG_MODE,
 } as const;
