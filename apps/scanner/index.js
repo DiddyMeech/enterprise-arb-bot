@@ -105,36 +105,95 @@ async function getOrchestrator() {
       return new ethers.Wallet(PRIVATE_KEY, provider);
     }
 
+    // ── DEX runtime lookup — returns correct router + quote method per dex ────
+    const UNIV3_SWAP_ROUTER_ARB  = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45';
+    const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS || '30');
+
+    function getDexRuntime(chain, dex) {
+      const isArb = chain === 'arbitrum';
+      const key = String(dex || '').toLowerCase();
+      if (key === 'sushi') {
+        return { dex: 'sushi', router: isArb ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE, feeBps: 30, kind: 'v2' };
+      }
+      if (key === 'univ3' || key === 'uniswapv3' || key === 'uniswap') {
+        return { dex: 'univ3', router: UNIV3_SWAP_ROUTER_ARB, quoter: UNIV3_QUOTER_ARB, fee: UNIV3_POOL_FEE, feeBps: 5, kind: 'v3' };
+      }
+      throw new Error(`Unsupported dex: ${dex}`);
+    }
+
+    function getTokenCtx(chain, tokenInSymbol) {
+      const isArb = chain === 'arbitrum';
+      const usdcAddr = isArb ? USDC_ARB : USDC_BASE;
+      const wethAddr = isArb ? WETH_ARB : WETH_BASE;
+      const isUsdcIn = tokenInSymbol === 'USDC';
+      return {
+        tokenInAddr:  isUsdcIn ? usdcAddr : wethAddr,
+        tokenOutAddr: isUsdcIn ? wethAddr : usdcAddr,
+        inDecimals:   isUsdcIn ? 6 : 18,
+        outDecimals:  isUsdcIn ? 18 : 6,
+        isUsdcIn,
+      };
+    }
+
+    async function quoteSingleLeg({ provider, chain, dex, tokenIn, tokenOut, amountInRaw }) {
+      const rt = getDexRuntime(chain, dex);
+      if (rt.kind === 'v2') {
+        const router = new ethers.Contract(rt.router, SUSHI_IFACE, provider);
+        const amounts = await router.getAmountsOut(amountInRaw, [tokenIn, tokenOut]);
+        return { dex: rt.dex, router: rt.router, amountOutRaw: amounts[1].toString(), feeBps: rt.feeBps };
+      }
+      // v3
+      const quoter = new ethers.Contract(rt.quoter, UNIV3_QUOTER_IFACE, provider);
+      const amountOut = await quoter.callStatic.quoteExactInputSingle(tokenIn, tokenOut, rt.fee, amountInRaw, 0);
+      return { dex: rt.dex, router: rt.router, amountOutRaw: amountOut.toString(), feeBps: rt.feeBps };
+    }
+
+    // Quotes both legs fresh, uses leg1 output as leg2 input, applies per-leg slippage
+    async function buildFreshTwoLegRoute({ opp, amountInUsd, provider, executorAddress }) {
+      const { tokenInAddr, tokenOutAddr, inDecimals, isUsdcIn } = getTokenCtx(opp.chain, opp.tokenIn);
+      const amountInRaw = ethers.utils.parseUnits(String(Math.round(amountInUsd)), inDecimals);
+      const deadline = Math.floor(Date.now() / 1000) + 45;
+
+      const leg1 = await quoteSingleLeg({ provider, chain: opp.chain, dex: opp.dexBuy,  tokenIn: tokenInAddr,  tokenOut: tokenOutAddr, amountInRaw });
+      const leg2 = await quoteSingleLeg({ provider, chain: opp.chain, dex: opp.dexSell, tokenIn: tokenOutAddr, tokenOut: tokenInAddr,  amountInRaw: leg1.amountOutRaw });
+
+      const leg1MinOutRaw = ethers.BigNumber.from(leg1.amountOutRaw).mul(10000 - SLIPPAGE_BPS).div(10000).toString();
+      const leg2MinOutRaw = ethers.BigNumber.from(leg2.amountOutRaw).mul(10000 - SLIPPAGE_BPS).div(10000).toString();
+
+      const grossProfitRaw = ethers.BigNumber.from(leg2.amountOutRaw).sub(amountInRaw);
+      const grossProfitUsd = Number(ethers.utils.formatUnits(grossProfitRaw.lt(0) ? ethers.BigNumber.from(0) : grossProfitRaw, inDecimals)) * (isUsdcIn ? 1 : ETH_PRICE_USD_HINT);
+      const dexFeesUsd     = amountInUsd * ((leg1.feeBps + leg2.feeBps) / 10000);
+      const gasUsd         = Number(opp.estimatedGasUsd || (opp.chain === 'arbitrum' ? 1.8 : 1.2));
+      const netProfitUsd   = grossProfitUsd - dexFeesUsd - gasUsd;
+
+      const normalized = normalizeRoute({ deadline, legs: [
+        { dex: leg1.dex, router: leg1.router, tokenIn: tokenInAddr,  tokenOut: tokenOutAddr, recipient: executorAddress, amountInRaw: amountInRaw.toString(), minOutRaw: leg1MinOutRaw },
+        { dex: leg2.dex, router: leg2.router, tokenIn: tokenOutAddr, tokenOut: tokenInAddr,  recipient: executorAddress, amountInRaw: leg1.amountOutRaw,        minOutRaw: leg2MinOutRaw },
+      ]});
+      const encodedLegs = normalized.map(l => encodeDexLeg(l));
+
+      return { amountInRaw: amountInRaw.toString(), amountOutRaw: leg2.amountOutRaw, grossProfitUsd, dexFeesUsd, gasUsd, netProfitUsd, minOutRaw: leg2MinOutRaw, deadline, encodedLegs };
+    }
+
     async function quoteExactRoute(opp, amountInUsd) {
       try {
         const provider = makeProvider(opp.chain);
-        const usdcAddr = opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
-        const wethAddr = opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
-        const sushiRouter = opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
+        const cfg2 = chainCfg(opp.chain);
+        const executorAddress = cfg2?.contractAddress || config.ARB_CONTRACT_ADDRESS;
+        if (!executorAddress) return { ok: false, reason: 'NO_EXECUTOR' };
 
-        const isUsdcIn = opp.tokenIn === 'USDC';
-        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
-        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
-        const inDecimals   = isUsdcIn ? 6 : 18;
-
-        const amountInRaw = ethers.utils.parseUnits(String(Math.round(amountInUsd)), inDecimals);
-        const sushi = new ethers.Contract(sushiRouter, SUSHI_IFACE, provider);
-        const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
-
-        const outDecimals    = isUsdcIn ? 18 : 6;
-        const outUsd         = parseFloat(ethers.utils.formatUnits(amounts[1], outDecimals)) * (isUsdcIn ? ETH_PRICE_USD_HINT : 1);
-        const grossProfitUsd = outUsd - amountInUsd;
-
-        if (grossProfitUsd <= 0) return { ok: false, reason: 'NO_PROFIT' };
+        const fresh = await buildFreshTwoLegRoute({ opp, amountInUsd, provider, executorAddress });
+        if (fresh.grossProfitUsd <= 0) return { ok: false, reason: 'NO_GROSS_PROFIT' };
+        if (fresh.netProfitUsd   <= 0) return { ok: false, reason: 'NO_NET_PROFIT' };
 
         return {
           ok: true,
-          grossProfitUsd: Math.max(0, grossProfitUsd),
-          gasUsd: opp.chain === 'arbitrum' ? 1.8 : 1.2,
-          dexFeesUsd: amountInUsd * 0.003,
+          grossProfitUsd: fresh.grossProfitUsd,
+          gasUsd: fresh.gasUsd,
+          dexFeesUsd: fresh.dexFeesUsd,
           flashLoanFeeUsd: 0,
-          amountOutRaw: amounts[1].toString(),
-          route: { chain: opp.chain, legs: [], amountInUsd, expectedGrossProfitUsd: grossProfitUsd },
+          amountOutRaw: fresh.amountOutRaw,
+          route: { chain: opp.chain, legs: fresh.encodedLegs, amountInUsd, expectedAmountOutRaw: fresh.amountOutRaw, expectedGrossProfitUsd: fresh.grossProfitUsd, minOutRaw: fresh.minOutRaw },
         };
       } catch (e) { return { ok: false, reason: `QUOTE_ERROR: ${e.message}` }; }
     }
@@ -146,35 +205,14 @@ async function getOrchestrator() {
         const executorAddress = cfg2?.contractAddress || config.ARB_CONTRACT_ADDRESS;
         if (!executorAddress) return { ok: false, mode: input.mode, decodedReason: 'NO_EXECUTOR' };
 
-        const usdcAddr = input.opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
-        const wethAddr = input.opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
-        const router   = input.opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
-        const isUsdcIn = input.opp.tokenIn === 'USDC';
-        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
-        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
-        const inDecimals   = isUsdcIn ? 6 : 18;
-        const amountInRaw  = ethers.utils.parseUnits(String(Math.round(input.amountInUsd)), inDecimals).toString();
-        const deadline     = Math.floor(Date.now() / 1000) + 60;
+        const fresh = await buildFreshTwoLegRoute({ opp: input.opp, amountInUsd: input.amountInUsd, provider, executorAddress });
+        if (fresh.netProfitUsd <= 0) return { ok: false, mode: input.mode, decodedReason: 'NEGATIVE_NET_AFTER_REFRESH' };
 
-        let leg2AmountInRaw = amountInRaw;
-        try {
-          const sushi = new ethers.Contract(router, SUSHI_IFACE, provider);
-          const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
-          leg2AmountInRaw = amounts[1].toString();
-        } catch { /* use fallback */ }
-
-        const normalized = normalizeRoute({
-          deadline,
-          legs: [
-            { dex: 'sushi', router, tokenIn: tokenInAddr, tokenOut: tokenOutAddr, recipient: executorAddress, amountInRaw, minOutRaw: '1' },
-            { dex: 'sushi', router, tokenIn: tokenOutAddr, tokenOut: tokenInAddr, recipient: executorAddress, amountInRaw: leg2AmountInRaw, minOutRaw: '1' },
-          ],
-        });
-
-        const encodedLegs = normalized.map(l => encodeDexLeg(l));
+        const { tokenInAddr } = getTokenCtx(input.opp.chain, input.opp.tokenIn);
         const plan = buildExecutionPlan({
           executorAddress, mode: input.mode,
-          route: { chain: input.opp.chain, tokenIn: tokenInAddr, tokenOut: tokenInAddr, amountInRaw, minProfitTokenRaw: '0', minOutRaw: '1', deadline, legs: encodedLegs },
+          route: { chain: input.opp.chain, tokenIn: tokenInAddr, tokenOut: tokenInAddr, amountInRaw: fresh.amountInRaw, minProfitTokenRaw: '1', minOutRaw: fresh.minOutRaw, deadline: fresh.deadline, legs: fresh.encodedLegs },
+          gasLimit: 700000,
         });
 
         await provider.call({ to: plan.target, data: plan.calldata });
@@ -190,39 +228,19 @@ async function getOrchestrator() {
       try {
         const cfg2 = chainCfg(opp.chain);
         const executorAddress = cfg2?.contractAddress || config.ARB_CONTRACT_ADDRESS;
-        const wallet = getWallet(opp.chain);
+        if (!executorAddress) return { ok: false, decodedReason: 'NO_EXECUTOR' };
+        const wallet  = getWallet(opp.chain);
+        const sizeUsd = evaluation.bestSizeUsd ?? TRADE_USD_HINT;
 
-        const usdcAddr = opp.chain === 'arbitrum' ? USDC_ARB : USDC_BASE;
-        const wethAddr = opp.chain === 'arbitrum' ? WETH_ARB : WETH_BASE;
-        const router   = opp.chain === 'arbitrum' ? SUSHI_ROUTER_ARB : SUSHI_ROUTER_BASE;
-        const isUsdcIn = opp.tokenIn === 'USDC';
-        const tokenInAddr  = isUsdcIn ? usdcAddr : wethAddr;
-        const tokenOutAddr = isUsdcIn ? wethAddr : usdcAddr;
-        const inDecimals   = isUsdcIn ? 6 : 18;
-        const sizeUsd      = evaluation.bestSizeUsd ?? TRADE_USD_HINT;
-        const amountInRaw  = ethers.utils.parseUnits(String(Math.round(sizeUsd)), inDecimals).toString();
-        const deadline     = Math.floor(Date.now() / 1000) + 60;
+        const fresh = await buildFreshTwoLegRoute({ opp, amountInUsd: sizeUsd, provider: wallet.provider, executorAddress });
+        if (fresh.netProfitUsd <= 0) return { ok: false, decodedReason: 'NEGATIVE_NET_AFTER_REFRESH' };
 
-        let leg2AmountInRaw = amountInRaw;
-        try {
-          const sushi = new ethers.Contract(router, SUSHI_IFACE, wallet.provider);
-          const amounts = await sushi.getAmountsOut(amountInRaw, [tokenInAddr, tokenOutAddr]);
-          leg2AmountInRaw = amounts[1].toString();
-        } catch { /* use initial amount */ }
-
-        const normalized = normalizeRoute({
-          deadline,
-          legs: [
-            { dex: opp.dexBuy,  router, tokenIn: tokenInAddr,  tokenOut: tokenOutAddr, recipient: executorAddress, amountInRaw,      minOutRaw: '1' },
-            { dex: opp.dexSell, router, tokenIn: tokenOutAddr, tokenOut: tokenInAddr,  recipient: executorAddress, amountInRaw: leg2AmountInRaw, minOutRaw: '1' },
-          ],
-        });
-
-        const encodedLegs = normalized.map(l => encodeDexLeg(l));
+        const { tokenInAddr } = getTokenCtx(opp.chain, opp.tokenIn);
         const plan = buildExecutionPlan({
           executorAddress,
           mode: evaluation.mode ?? 'wallet',
-          route: { chain: opp.chain, tokenIn: tokenInAddr, tokenOut: tokenInAddr, amountInRaw, minProfitTokenRaw: '0', minOutRaw: '1', deadline, legs: encodedLegs },
+          route: { chain: opp.chain, tokenIn: tokenInAddr, tokenOut: tokenInAddr, amountInRaw: fresh.amountInRaw, minProfitTokenRaw: '1', minOutRaw: fresh.minOutRaw, deadline: fresh.deadline, legs: fresh.encodedLegs },
+          gasLimit: 700000,
         });
 
         const tx = await wallet.sendTransaction({ to: plan.target, data: plan.calldata, gasLimit: plan.gasLimit });
@@ -231,6 +249,7 @@ async function getOrchestrator() {
         return { ok: false, error: err, decodedReason: decodeCommonRevert(err) };
       }
     }
+
 
     // ── Real waitForReceipt ───────────────────────────────────────────────────
     async function waitForReceipt(txHash, chain) {

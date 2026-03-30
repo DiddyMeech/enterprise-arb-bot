@@ -42,54 +42,61 @@ contract ArbitrageExecutor {
         owner = msg.sender;
     }
 
-    // executeArbitrage performs sequential swaps tracking strict minimum thresholds. 
+    // executeArbitrage performs sequential swaps with per-leg slippage protection.
+    // legMinOuts[i] = minimum tokens out for swap i (computed off-chain with slippage tolerance).
     function executeArbitrage(
         address tokenA,
         address tokenB,
         uint256 amountIn,
         address[] calldata routers,
-        uint256 minAmountOut
+        uint256[] calldata legMinOuts,
+        uint256 minProfit,
+        uint256 deadline
     ) external onlyOwner whenNotPaused returns (uint256) {
-        require(routers.length <= 3, "Max route hops exceeded");
+        require(routers.length >= 2,               "Need at least 2 legs");
+        require(routers.length <= 3,               "Max route hops exceeded");
+        require(routers.length == legMinOuts.length, "Leg mins mismatch");
         require(approvedTokens[tokenA] && approvedTokens[tokenB], "Token not in allowlist");
+        require(block.timestamp <= deadline,       "Deadline expired");
 
-        uint256 currentBalance = IERC20(tokenA).balanceOf(address(this));
-        
-        uint256 intermediaryTokens = amountIn;
+        uint256 startBalance = IERC20(tokenA).balanceOf(address(this));
+        uint256 currentAmount = amountIn;
         address currentToken = tokenA;
 
-        for(uint i = 0; i < routers.length; i++) {
+        for (uint i = 0; i < routers.length; i++) {
             address router = routers[i];
             require(approvedRouters[router], "Router not approved");
-            
+
             address nextToken = (i == 0) ? tokenB : tokenA;
 
-            IERC20(currentToken).approve(router, intermediaryTokens);
-            
+            // Reset allowance to 0 first (USDT-style double-spend guard)
+            IERC20(currentToken).approve(router, 0);
+            IERC20(currentToken).approve(router, currentAmount);
+
             address[] memory path = new address[](2);
             path[0] = currentToken;
             path[1] = nextToken;
 
-            // Simple route swap sequence execution
             uint256[] memory amountsOut = IUniswapV2Router02(router).swapExactTokensForTokens(
-                intermediaryTokens,
-                1, // Local leg slippage bypassed. We manage aggregated net minAmountOut cleanly.
+                currentAmount,
+                legMinOuts[i],   // ← per-leg slippage protection (not 1)
                 path,
                 address(this),
-                block.timestamp
+                deadline
             );
 
-            intermediaryTokens = amountsOut[1];
+            currentAmount = amountsOut[amountsOut.length - 1];
             currentToken = nextToken;
         }
 
-        uint256 finalBalance = IERC20(tokenA).balanceOf(address(this));
-        uint256 profit = finalBalance - currentBalance;
-        
-        // Final assertion ensures that cross-DEX arbitrage exceeded threshold
-        require(profit >= minAmountOut, "Insufficient net profit or slippage exceeded max tolerance");
+        uint256 endBalance = IERC20(tokenA).balanceOf(address(this));
+        require(endBalance >= startBalance, "Net loss: balance decreased");
+
+        uint256 profit = endBalance - startBalance;
+        require(profit >= minProfit, "Profit below threshold");
         return profit;
     }
+
 
     // --- Admin / Risk Control ---
     function setPaused(bool _paused) external onlyOwner { 
