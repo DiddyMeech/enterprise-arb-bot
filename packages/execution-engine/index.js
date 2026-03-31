@@ -4,6 +4,8 @@ const STANDARD_EXECUTOR_IFACE = new ethers.utils.Interface([
   'function executeArbitrage(address tokenA,address tokenB,uint256 amountIn,address[] calldata routers,uint256[] calldata legMinOuts,uint256 minProfit,uint256 deadline) external returns (uint256)'
 ]);
 
+const { encodeRoute, validateRouteForEncoding } = require("../executor");
+
 const FLASH_EXECUTOR_IFACE = new ethers.utils.Interface([
   'function requestFlashLoan(address asset,uint256 amount,bytes calldata params) external'
 ]);
@@ -41,36 +43,18 @@ function buildFlashExecutionPlan({
   gasLimit = 1300000
 }) {
   if (!flashExecutorAddress) throw new Error('MISSING_FLASH_EXECUTOR_ADDRESS');
-  if (!route || !Array.isArray(route.legs) || route.legs.length < 2) {
-    throw new Error('INVALID_ROUTE');
+  
+  const validation = validateRouteForEncoding(route);
+  if (!validation.ok) {
+    throw new Error(`INVALID_ROUTE_FOR_ENCODING: ${validation.reasons.join(",")}`);
   }
 
-  const flashRoute = {
-    profitToken: route.tokenIn,
-    minProfitRaw: route.minProfitTokenRaw || '1',
-    deadline: route.deadline,
-    legs: route.legs.map((leg) => ({
-      dexKind: leg.kind === 'v3' ? 1 : 0,
-      router: leg.router,
-      tokenIn: leg.tokenIn,
-      tokenOut: leg.tokenOut,
-      amountInRaw: leg.amountInRaw,
-      minOutRaw: leg.minOutRaw,
-      fee: leg.fee || 0
-    }))
-  };
-
-  const params = ethers.utils.defaultAbiCoder.encode(
-    [
-      'tuple(address profitToken,uint256 minProfitRaw,uint256 deadline,tuple(uint8 dexKind,address router,address tokenIn,address tokenOut,uint256 amountInRaw,uint256 minOutRaw,uint24 fee)[] legs)'
-    ],
-    [flashRoute]
-  );
+  const encodedRoute = encodeRoute(route);
 
   const calldata = FLASH_EXECUTOR_IFACE.encodeFunctionData('requestFlashLoan', [
     route.tokenIn,
     route.amountInRaw,
-    params
+    encodedRoute
   ]);
 
   return {
@@ -81,7 +65,67 @@ function buildFlashExecutionPlan({
   };
 }
 
+const { shouldBuildExecution, getExecutionConfig } = require("./should-build-execution");
+const {
+  isRouteCoolingDown,
+  markRouteFailure,
+  clearRouteFailure,
+  getRouteCooldownKey,
+} = require("./route-cooldown");
+const {
+  getTradingMode,
+  shouldPermitLive,
+  recordPaperTrade,
+  recordLiveTrade,
+  recordPaperCandidate,
+  recordPaperSummary,
+  recordWouldSend,
+  recordFamilyAnalytics,
+} = require("./trading-mode");
+const { checkLiveLimits } = require("./live-limits");
+
+const {
+  getRouteFamilyKey,
+  markFamilyFailure,
+  clearFamilyFailure,
+  isFamilyCoolingDown,
+  getFamilyFailureState,
+} = require("./route-family");
+
+const {
+  getSendConfig,
+  shouldBroadcastTx,
+  buildUnsignedTx,
+  simulateUnsignedTx,
+  broadcastSignedTx,
+} = require("./send-path");
+
 module.exports = {
   buildExecutionPlan,
-  buildFlashExecutionPlan
+  buildFlashExecutionPlan,
+  shouldBuildExecution,
+  getExecutionConfig,
+  isRouteCoolingDown,
+  markRouteFailure,
+  clearRouteFailure,
+  getRouteCooldownKey,
+  getTradingMode,
+  shouldPermitLive,
+  recordPaperTrade,
+  recordLiveTrade,
+  recordPaperCandidate,
+  recordPaperSummary,
+  recordWouldSend,
+  recordFamilyAnalytics,
+  checkLiveLimits,
+  getRouteFamilyKey,
+  markFamilyFailure,
+  clearFamilyFailure,
+  isFamilyCoolingDown,
+  getFamilyFailureState,
+  getSendConfig,
+  shouldBroadcastTx,
+  buildUnsignedTx,
+  simulateUnsignedTx,
+  broadcastSignedTx,
 };

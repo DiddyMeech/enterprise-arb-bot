@@ -67,6 +67,9 @@ const CHAINS = {
       quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
       sushi: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
       univ3: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+      apeswap: process.env.POLYGON_APESWAP_ROUTER || "",
+      dfyn: process.env.POLYGON_DFYN_ROUTER || "",
+      meshswap: process.env.POLYGON_MESH_SWAP_ROUTER || "",
     },
     aave: {
       poolAddressesProvider:

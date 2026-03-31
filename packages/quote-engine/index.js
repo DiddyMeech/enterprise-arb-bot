@@ -1,3 +1,9 @@
+const {
+  buildDynamicUniverse,
+  buildHubAndSpokeCycles,
+  buildHubPairs,
+} = require("./dynamic-universe");
+
 const { ethers } = require("ethers");
 const { getChain } = require("../config");
 const {
@@ -5,6 +11,7 @@ const {
   encodeCall,
   decodeCallResult,
   promiseWithTimeout,
+  providerCallWithTimeout,
 } = require("./multicall");
 
 // ---------- ABIs ----------
@@ -50,6 +57,12 @@ const DEFAULT_V2_FACTORIES = {
   quickswap:
     process.env.POLYGON_QUICKSWAP_FACTORY ||
     "0x5757371414417b8c6caad45baef941abc7d3ab32",
+  apeswap:
+    process.env.POLYGON_APESWAP_FACTORY || "",
+  dfyn:
+    process.env.POLYGON_DFYN_FACTORY || "",
+  meshswap:
+    process.env.POLYGON_MESH_SWAP_FACTORY || "",
 };
 
 function bn(v) {
@@ -62,6 +75,30 @@ function nowSec() {
 
 function getDeadline() {
   return nowSec() + Number(process.env.ROUTE_DEADLINE_SECONDS || 45);
+}
+
+function discoverySlippageBps() {
+  return Number(
+    process.env.DISCOVERY_SLIPPAGE_BPS ||
+    process.env.SLIPPAGE_BPS ||
+    60
+  );
+}
+
+function executionSlippageBps() {
+  return Number(
+    process.env.EXECUTION_SLIPPAGE_BPS ||
+    process.env.SLIPPAGE_BPS ||
+    25
+  );
+}
+
+function applyDiscoverySlippage(rawAmount) {
+  return bn(rawAmount).mul(10000 - discoverySlippageBps()).div(10000);
+}
+
+function applyExecutionSlippage(rawAmount) {
+  return bn(rawAmount).mul(10000 - executionSlippageBps()).div(10000);
 }
 
 function slippageBps() {
@@ -131,12 +168,12 @@ function parseAmountUsdToRaw(symbol, usdAmount, nativeTokenUsd) {
     const ethUsd = Number(
       nativeTokenUsd || process.env.ETH_PRICE_USD_HINT || 2200
     );
-    return ethers.utils.parseUnits(String(usdAmount / ethUsd), 18);
+    return ethers.utils.parseUnits(Number(usdAmount / ethUsd).toFixed(18), 18);
   }
 
   if (s === "WMATIC") {
     const maticUsd = Number(process.env.MATIC_PRICE_USD_HINT || 1.0);
-    return ethers.utils.parseUnits(String(usdAmount / maticUsd), 18);
+    return ethers.utils.parseUnits(Number(usdAmount / maticUsd).toFixed(18), 18);
   }
 
   return ethers.utils.parseUnits(String(usdAmount), 18);
@@ -176,18 +213,28 @@ function usdToMinProfitRaw(symbol, usd, nativeTokenUsd) {
     const ethUsd = Number(
       nativeTokenUsd || process.env.ETH_PRICE_USD_HINT || 2200
     );
-    return ethers.utils.parseUnits(String(usd / ethUsd), 18);
+    return ethers.utils.parseUnits(Number(usd / ethUsd).toFixed(18), 18);
   }
 
   if (s === "WMATIC") {
     const maticUsd = Number(process.env.MATIC_PRICE_USD_HINT || 1.0);
-    return ethers.utils.parseUnits(String(usd / maticUsd), 18);
+    return ethers.utils.parseUnits(Number(usd / maticUsd).toFixed(18), 18);
   }
 
   return ethers.utils.parseUnits(String(usd), 18);
 }
 
-async function getGasUsd(provider, nativeTokenUsd, legCount = 2) {
+function getNativeTokenUsd(chainKey, fallback) {
+  const key = String(chainKey || "").toLowerCase();
+
+  if (key === "polygon") {
+    return Number(process.env.MATIC_PRICE_USD_HINT || 1.0);
+  }
+
+  return Number(fallback || process.env.ETH_PRICE_USD_HINT || 2200);
+}
+
+async function getGasUsd(provider, nativeTokenUsd, legCount = 2, chainKey = "polygon") {
   const gasPrice = await promiseWithTimeout(
     provider.getGasPrice(),
     rpcCallTimeoutMs(),
@@ -196,7 +243,7 @@ async function getGasUsd(provider, nativeTokenUsd, legCount = 2) {
   const gasNative = Number(
     ethers.utils.formatEther(gasPrice.mul(gasUnitsApprox(legCount)))
   );
-  return gasNative * Number(nativeTokenUsd || process.env.ETH_PRICE_USD_HINT || 2200);
+  return gasNative * getNativeTokenUsd(chainKey, nativeTokenUsd);
 }
 
 function routeId(parts) {
@@ -211,7 +258,7 @@ function buildLeg({ dex, tokenIn, tokenOut, amountInRaw, quotedOutRaw }) {
     tokenIn,
     tokenOut,
     amountInRaw: String(amountInRaw),
-    minOutRaw: applySlippage(quotedOutRaw).toString(),
+    minOutRaw: applyExecutionSlippage(quotedOutRaw).toString(),
     fee: dex.kind === "v3" ? Number(dex.fee) : 0,
   };
 }
@@ -246,6 +293,33 @@ function buildDexCatalog(chain) {
       kind: "v2",
       router: dexes.quickswap.router,
       factory: DEFAULT_V2_FACTORIES.quickswap,
+    });
+  }
+
+  if (dexes.apeswap?.router && DEFAULT_V2_FACTORIES.apeswap) {
+    out.push({
+      name: "apeswap",
+      kind: "v2",
+      router: dexes.apeswap.router,
+      factory: DEFAULT_V2_FACTORIES.apeswap,
+    });
+  }
+
+  if (dexes.dfyn?.router && DEFAULT_V2_FACTORIES.dfyn) {
+    out.push({
+      name: "dfyn",
+      kind: "v2",
+      router: dexes.dfyn.router,
+      factory: DEFAULT_V2_FACTORIES.dfyn,
+    });
+  }
+
+  if (dexes.meshswap?.router && DEFAULT_V2_FACTORIES.meshswap) {
+    out.push({
+      name: "meshswap",
+      kind: "v2",
+      router: dexes.meshswap.router,
+      factory: DEFAULT_V2_FACTORIES.meshswap,
     });
   }
 
@@ -689,6 +763,160 @@ function getQuote(quotes, dexName, from, to, size) {
   return quotes.get([dexName, from.toLowerCase(), to.toLowerCase(), size].join("|")) || null;
 }
 
+function routeLegCount(route) {
+  return Array.isArray(route.legs) ? route.legs.length : 0;
+}
+
+function normalizeDexFromLeg(chain, leg) {
+  const dexes = buildDexCatalog(chain);
+  const legDex = String(leg.dex || "").toLowerCase();
+  const legKind = String(leg.kind || "").toLowerCase();
+  const legFee = Number(leg.fee || 0);
+
+  return dexes.find((d) => {
+    const base = String(d.baseName || d.name || "").toLowerCase();
+    const sameDex = base === legDex || String(d.name).toLowerCase() === legDex;
+    const sameKind = String(d.kind).toLowerCase() === legKind;
+    const sameFee =
+      legKind !== "v3" ? true : Number(d.fee || 0) === legFee;
+
+    return sameDex && sameKind && sameFee;
+  });
+}
+
+async function quoteDex(provider, dex, amountInRaw, tokenIn, tokenOut) {
+  if (dex.kind === "v2") {
+    const { iface, callData } = encodeCall(V2_ROUTER_ABI, "getAmountsOut", [amountInRaw, [tokenIn, tokenOut]]);
+    const raw = await providerCallWithTimeout(provider, { to: dex.router, data: callData }, rpcCallTimeoutMs());
+    const decoded = decodeCallResult(iface, "getAmountsOut", raw);
+    return decoded[0][decoded[0].length - 1];
+  } else {
+    const { iface, callData } = encodeCall(V3_QUOTER_V2_ABI, "quoteExactInputSingle", [{
+      tokenIn, tokenOut, amountIn: amountInRaw, fee: dex.fee, sqrtPriceLimitX96: 0
+    }]);
+    const raw = await providerCallWithTimeout(provider, { to: dex.quoter, data: callData }, rpcCallTimeoutMs());
+    const decoded = decodeCallResult(iface, "quoteExactInputSingle", raw);
+    return decoded[0]?.amountOut || decoded[0];
+  }
+}
+
+async function exactQuoteLeg(provider, chain, leg, amountInRaw) {
+  const dex = normalizeDexFromLeg(chain, leg);
+  if (!dex) {
+    throw new Error(`UNKNOWN_DEX_FOR_LEG:${leg.dex}:${leg.kind}:${leg.fee || 0}`);
+  }
+
+  const out = await quoteDex(
+    provider,
+    dex,
+    bn(amountInRaw),
+    leg.tokenIn,
+    leg.tokenOut
+  );
+
+  return {
+    dex,
+    amountInRaw: bn(amountInRaw),
+    amountOutRaw: bn(out),
+  };
+}
+
+async function exactPropagateRoute(provider, chain, route, nativeTokenUsd) {
+  if (!route || !Array.isArray(route.legs) || !route.legs.length) {
+    throw new Error("INVALID_ROUTE_FOR_PROPAGATION");
+  }
+
+  let currentIn = bn(route.amountInRaw);
+  const exactLegs = [];
+
+  for (const leg of route.legs) {
+    const exact = await exactQuoteLeg(provider, chain, leg, currentIn);
+
+    exactLegs.push(
+      buildLeg({
+        dex: exact.dex,
+        tokenIn: leg.tokenIn,
+        tokenOut: leg.tokenOut,
+        amountInRaw: exact.amountInRaw,
+        quotedOutRaw: exact.amountOutRaw,
+      })
+    );
+
+    currentIn = exact.amountOutRaw;
+  }
+
+  const legCount = exactLegs.length;
+  const firstLeg = exactLegs[0];
+  const finalOut = currentIn;
+  const startAmount = bn(route.amountInRaw);
+  const grossProfitTokenRaw = finalOut.sub(startAmount);
+
+  let gasUsd;
+  try {
+    gasUsd = await getGasUsd(provider, nativeTokenUsd, legCount, chain.name);
+  } catch {
+    gasUsd =
+      legCount >= 3
+        ? Number(process.env.GAS_USD_FALLBACK_3LEG || 0.08)
+        : Number(process.env.GAS_USD_FALLBACK || 0.05);
+  }
+
+  const flashFeeRaw = startAmount.mul(flashPremiumBps()).div(10000);
+  const flashFeeUsd = rawToUsd(route.tokenInSymbol, flashFeeRaw, nativeTokenUsd);
+  const grossProfitUsd = rawToUsd(
+    route.tokenInSymbol,
+    grossProfitTokenRaw,
+    nativeTokenUsd
+  );
+  const netProfitUsd = grossProfitUsd - gasUsd - flashFeeUsd;
+
+  return {
+    ...route,
+    expectedAmountOutRaw: finalOut.toString(),
+    grossProfitTokenRaw: grossProfitTokenRaw.toString(),
+    grossProfitUsd,
+    gasUsd,
+    flashFeeUsd,
+    netProfitUsd,
+    deadline: getDeadline(),
+    legs: exactLegs,
+    metadata: {
+      ...(route.metadata || {}),
+      sizingMode: "propagated",
+      exactRequoted: true,
+      approximateNetProfitUsd: Number(route.netProfitUsd || 0),
+      quoteCreatedAtSec: Math.floor(Date.now() / 1000),
+      discoverySlippageBps: discoverySlippageBps(),
+      executionSlippageBps: executionSlippageBps(),
+    },
+  };
+}
+
+async function exactRequoteTopRoutes(provider, chain, routes, nativeTokenUsd) {
+  const topN = Number(process.env.EXACT_REQUOTE_TOP_N || 8);
+  const candidates = routes.slice(0, topN);
+
+  const out = [];
+
+  for (const route of candidates) {
+    try {
+      const exact = await exactPropagateRoute(provider, chain, route, nativeTokenUsd);
+      out.push(exact);
+    } catch (err) {
+      out.push({
+        ...route,
+        metadata: {
+          ...(route.metadata || {}),
+          sizingMode: "approximate",
+          exactRequoteError: err.message,
+        },
+      });
+    }
+  }
+
+  return out.sort((a, b) => Number(b.netProfitUsd || -999999) - Number(a.netProfitUsd || -999999));
+}
+
 async function getOptimalQuote({
   chainKey,
   provider,
@@ -698,16 +926,21 @@ async function getOptimalQuote({
   const startedAt = Date.now();
   const chain = getChain(chainKey);
   const dexes = buildDexCatalog(chain);
-  const universe = buildTokenUniverse(chain);
-  const twoLegPairs = buildTwoLegPairs(universe);
-  const cycles = buildTriangularCycles(universe);
+  const { universe, fingerprint } = await buildDynamicUniverse();
+  const twoLegPairs = buildHubPairs(universe);
+  const cycles = buildHubAndSpokeCycles(universe);
+
+  console.error("[dynamic-universe] hubs+spokes=", universe.length);
+  console.error("[dynamic-universe] fingerprint=", JSON.stringify(fingerprint));
   const usdSizes = [
     Number(amountInUsd || process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || 5)
   ].filter((n) => Number.isFinite(n) && n > 0);
 
+  console.error("[quote-engine] usdSizes=", usdSizes);
+
   let baseGasUsd2 = Number(process.env.GAS_USD_FALLBACK || 0.05);
   try {
-    baseGasUsd2 = await getGasUsd(provider, nativeTokenUsd, 2);
+    baseGasUsd2 = await getGasUsd(provider, nativeTokenUsd, 2, chain.name);
   } catch {}
   let globalGasUsd3 = null;
 
@@ -805,6 +1038,10 @@ async function getOptimalQuote({
               amountInUsd: size,
               buyDex: buyDex.name,
               sellDex: sellDex.name,
+              sizingMode: "approximate",
+              discoverySlippageBps: discoverySlippageBps(),
+              executionSlippageBps: executionSlippageBps(),
+              universeFingerprint: fingerprint,
             },
           };
 
@@ -839,7 +1076,7 @@ async function getOptimalQuote({
             
             let gasUsd = baseGasUsd2;
             try {
-              if (!globalGasUsd3) globalGasUsd3 = await getGasUsd(provider, nativeTokenUsd, 3);
+              if (!globalGasUsd3) globalGasUsd3 = await getGasUsd(provider, nativeTokenUsd, 3, chain.name);
               gasUsd = globalGasUsd3;
             } catch {
               gasUsd = Number(process.env.GAS_USD_FALLBACK_3LEG || 0.08);
@@ -907,7 +1144,11 @@ async function getOptimalQuote({
                 dex2: dex2.name,
                 dex3: dex3.name,
                 pivot: "WMATIC",
+                sizingMode: "approximate",
                 note: "Stage 3 batched triangular approximation; exact propagated sizing comes next.",
+                discoverySlippageBps: discoverySlippageBps(),
+                executionSlippageBps: executionSlippageBps(),
+                universeFingerprint: fingerprint,
               },
             };
 
@@ -921,7 +1162,27 @@ async function getOptimalQuote({
     }
   }
 
-  const positive = routes
+  const approximate = routes
+    .filter((r) => Number.isFinite(r.netProfitUsd))
+    .sort((a, b) => Number(b.netProfitUsd) - Number(a.netProfitUsd));
+
+  if (!approximate.length) {
+    return {
+      ok: false,
+      reason: "NO_ROUTE",
+      bestRoute: null,
+      routes: [],
+    };
+  }
+
+  const exact = await exactRequoteTopRoutes(
+    provider,
+    chain,
+    approximate,
+    nativeTokenUsd
+  );
+
+  const positive = exact
     .filter((r) => Number.isFinite(r.netProfitUsd))
     .sort((a, b) => Number(b.netProfitUsd) - Number(a.netProfitUsd));
 
@@ -932,6 +1193,11 @@ async function getOptimalQuote({
     reason: bestRoute ? null : "NO_ROUTE",
     bestRoute,
     routes: positive.slice(0, 50),
+    approximateTop: approximate.slice(0, 10).map((r) => ({
+      id: r.id,
+      netProfitUsd: r.netProfitUsd,
+      sizingMode: r.metadata?.sizingMode || "approximate",
+    })),
   };
 }
 

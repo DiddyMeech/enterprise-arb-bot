@@ -52,7 +52,23 @@ function pickBestRoute(routes) {
   return [...routes].sort((a, b) => Number(b.netProfitUsd) - Number(a.netProfitUsd))[0];
 }
 
+const { shouldExecuteRoute, getLiveSafetyConfig } = require("./should-execute-route");
+const {
+  scoreRoute,
+  enrichRouteScore,
+  rankRoutes,
+  classifyRoute,
+  topRoutesByBucket,
+} = require("./score-route");
+
 module.exports = {
   evaluateRoute,
-  pickBestRoute
+  pickBestRoute,
+  shouldExecuteRoute,
+  getLiveSafetyConfig,
+  scoreRoute,
+  enrichRouteScore,
+  rankRoutes,
+  classifyRoute,
+  topRoutesByBucket,
 };
