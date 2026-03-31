@@ -705,6 +705,12 @@ async function getOptimalQuote({
     Number(amountInUsd || process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || 5)
   ].filter((n) => Number.isFinite(n) && n > 0);
 
+  let baseGasUsd2 = Number(process.env.GAS_USD_FALLBACK || 0.05);
+  try {
+    baseGasUsd2 = await getGasUsd(provider, nativeTokenUsd, 2);
+  } catch {}
+  let globalGasUsd3 = null;
+
   if (!dexes.length) return { ok: false, reason: "NO_DEXES", bestRoute: null, routes: [] };
   if (!universe.length) return { ok: false, reason: "NO_TOKENS", bestRoute: null, routes: [] };
 
@@ -746,12 +752,7 @@ async function getOptimalQuote({
           const flashFeeRaw = q1.amountInRaw.mul(flashPremiumBps()).div(10000);
           const flashFeeUsd = rawToUsd(pair.tokenInSymbol, flashFeeRaw, nativeTokenUsd);
           
-          let gasUsd;
-          try {
-            gasUsd = await getGasUsd(provider, nativeTokenUsd, 2);
-          } catch {
-            gasUsd = Number(process.env.GAS_USD_FALLBACK || 0.05);
-          }
+          let gasUsd = baseGasUsd2;
           
           const netProfitUsd = grossProfitUsd - gasUsd - flashFeeUsd;
 
@@ -836,9 +837,10 @@ async function getOptimalQuote({
             const flashFeeRaw = q1.amountInRaw.mul(flashPremiumBps()).div(10000);
             const flashFeeUsd = rawToUsd(cycle.startSymbol, flashFeeRaw, nativeTokenUsd);
             
-            let gasUsd;
+            let gasUsd = baseGasUsd2;
             try {
-              gasUsd = await getGasUsd(provider, nativeTokenUsd, 3);
+              if (!globalGasUsd3) globalGasUsd3 = await getGasUsd(provider, nativeTokenUsd, 3);
+              gasUsd = globalGasUsd3;
             } catch {
               gasUsd = Number(process.env.GAS_USD_FALLBACK_3LEG || 0.08);
             }
