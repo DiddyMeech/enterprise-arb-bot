@@ -1,5 +1,11 @@
 const { ethers } = require("ethers");
 const { getChain } = require("../config");
+const {
+  aggregate3,
+  encodeCall,
+  decodeCallResult,
+  promiseWithTimeout,
+} = require("./multicall");
 
 // ---------- ABIs ----------
 const V2_ROUTER_ABI = [
@@ -16,16 +22,16 @@ const V2_PAIR_ABI = [
   "function token1() external view returns (address)",
 ];
 
-const V3_QUOTER_V2_ABI = [
-  "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)",
-];
-
 const V3_FACTORY_ABI = [
   "function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)",
 ];
 
 const V3_POOL_ABI = [
   "function liquidity() external view returns (uint128)",
+];
+
+const V3_QUOTER_V2_ABI = [
+  "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)",
 ];
 
 // ---------- Constants ----------
@@ -46,7 +52,6 @@ const DEFAULT_V2_FACTORIES = {
     "0x5757371414417b8c6caad45baef941abc7d3ab32",
 };
 
-// ---------- Helpers ----------
 function bn(v) {
   return ethers.BigNumber.from(String(v));
 }
@@ -60,19 +65,29 @@ function getDeadline() {
 }
 
 function slippageBps() {
-  return Number(process.env.SLIPPAGE_BPS || 50);
+  return Number(process.env.SLIPPAGE_BPS || 60);
 }
 
 function flashPremiumBps() {
   return Number(process.env.FLASH_LOAN_PREMIUM_BPS || 5);
 }
 
-function gasUnitsApprox() {
-  return Number(process.env.GAS_UNITS_APPROX || 260000);
+function gasUnitsApprox(legCount = 2) {
+  const base = Number(process.env.GAS_UNITS_APPROX || 260000);
+  const extraPerLeg = Number(process.env.GAS_UNITS_PER_EXTRA_LEG || 90000);
+  return legCount <= 2 ? base : base + (legCount - 2) * extraPerLeg;
 }
 
 function timeoutBudgetMs() {
-  return Number(process.env.QUOTE_TIMEOUT_BUDGET_MS || 3500);
+  return Number(process.env.QUOTE_TIMEOUT_BUDGET_MS || 5000);
+}
+
+function rpcCallTimeoutMs() {
+  return Number(process.env.RPC_CALL_TIMEOUT_MS || 2500);
+}
+
+function quoteBatchSize() {
+  return Number(process.env.QUOTE_BATCH_SIZE || 80);
 }
 
 function minV2ReserveUsd() {
@@ -172,10 +187,14 @@ function usdToMinProfitRaw(symbol, usd, nativeTokenUsd) {
   return ethers.utils.parseUnits(String(usd), 18);
 }
 
-async function getGasUsd(provider, nativeTokenUsd) {
-  const gasPrice = await provider.getGasPrice();
+async function getGasUsd(provider, nativeTokenUsd, legCount = 2) {
+  const gasPrice = await promiseWithTimeout(
+    provider.getGasPrice(),
+    rpcCallTimeoutMs(),
+    "GAS_PRICE_TIMEOUT"
+  );
   const gasNative = Number(
-    ethers.utils.formatEther(gasPrice.mul(gasUnitsApprox()))
+    ethers.utils.formatEther(gasPrice.mul(gasUnitsApprox(legCount)))
   );
   return gasNative * Number(nativeTokenUsd || process.env.ETH_PRICE_USD_HINT || 2200);
 }
@@ -199,6 +218,12 @@ function buildLeg({ dex, tokenIn, tokenOut, amountInRaw, quotedOutRaw }) {
 
 function withinBudget(startedAt) {
   return Date.now() - startedAt < timeoutBudgetMs();
+}
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
 // ---------- DEX catalog ----------
@@ -241,185 +266,429 @@ function buildDexCatalog(chain) {
   return out;
 }
 
-function buildTokenPairs(chain) {
+// ---------- Token universe ----------
+function buildTokenUniverse(chain) {
   const t = chain.tokens || {};
-  const pairs = [];
+  const universe = [];
 
-  if (t.USDC?.address && t.WETH?.address) {
-    pairs.push({
+  if (t.USDC?.address) universe.push({ symbol: "USDC", address: t.USDC.address });
+  if (t.WETH?.address) universe.push({ symbol: "WETH", address: t.WETH.address });
+  if (t.WMATIC?.address) universe.push({ symbol: "WMATIC", address: t.WMATIC.address });
+
+  return universe;
+}
+
+function buildTwoLegPairs(universe) {
+  const out = [];
+  const by = Object.fromEntries(universe.map((t) => [t.symbol, t]));
+
+  if (by.USDC && by.WETH) {
+    out.push({
       tokenInSymbol: "USDC",
-      tokenIn: t.USDC.address,
+      tokenIn: by.USDC.address,
       tokenOutSymbol: "WETH",
-      tokenOut: t.WETH.address,
+      tokenOut: by.WETH.address,
+      shape: "2LEG",
     });
   }
 
-  if (t.USDC?.address && t.WMATIC?.address) {
-    pairs.push({
+  if (by.USDC && by.WMATIC) {
+    out.push({
       tokenInSymbol: "USDC",
-      tokenIn: t.USDC.address,
+      tokenIn: by.USDC.address,
       tokenOutSymbol: "WMATIC",
-      tokenOut: t.WMATIC.address,
+      tokenOut: by.WMATIC.address,
+      shape: "2LEG",
     });
   }
 
-  if (t.WETH?.address && t.WMATIC?.address) {
-    pairs.push({
+  if (by.WETH && by.WMATIC) {
+    out.push({
       tokenInSymbol: "WETH",
-      tokenIn: t.WETH.address,
+      tokenIn: by.WETH.address,
       tokenOutSymbol: "WMATIC",
-      tokenOut: t.WMATIC.address,
+      tokenOut: by.WMATIC.address,
+      shape: "2LEG",
     });
   }
 
-  return pairs;
+  return out;
 }
 
-// ---------- Pool checks / pruning ----------
-async function v2PairInfo(provider, factoryAddress, tokenA, tokenB) {
-  const factory = new ethers.Contract(factoryAddress, V2_FACTORY_ABI, provider);
-  const pairAddress = await factory.getPair(tokenA, tokenB);
+function buildTriangularCycles(universe) {
+  const out = [];
 
-  if (!pairAddress || pairAddress === ethers.constants.AddressZero) {
-    return null;
+  for (const start of universe) {
+    for (const mid1 of universe) {
+      if (mid1.address === start.address) continue;
+
+      for (const mid2 of universe) {
+        if (mid2.address === start.address) continue;
+        if (mid2.address === mid1.address) continue;
+
+        out.push({
+          shape: "3LEG",
+          startSymbol: start.symbol,
+          start: start.address,
+          mid1Symbol: mid1.symbol,
+          mid1: mid1.address,
+          mid2Symbol: mid2.symbol,
+          mid2: mid2.address,
+        });
+      }
+    }
   }
 
-  const pair = new ethers.Contract(pairAddress, V2_PAIR_ABI, provider);
-  const [reserves, token0, token1] = await Promise.all([
-    pair.getReserves(),
-    pair.token0(),
-    pair.token1(),
-  ]);
-
-  return {
-    pairAddress,
-    token0,
-    token1,
-    reserve0: bn(reserves.reserve0),
-    reserve1: bn(reserves.reserve1),
-  };
-}
-
-function v2ReserveUsdEstimate(pairInfo, tokenA, tokenB, nativeTokenUsd) {
-  const t0 = pairInfo.token0.toLowerCase();
-  const ta = tokenA.address.toLowerCase();
-  const tb = tokenB.address.toLowerCase();
-
-  const reserveA = t0 === ta ? pairInfo.reserve0 : pairInfo.reserve1;
-  const reserveB = t0 === tb ? pairInfo.reserve0 : pairInfo.reserve1;
-
-  return (
-    rawToUsd(tokenA.symbol, reserveA, nativeTokenUsd) +
-    rawToUsd(tokenB.symbol, reserveB, nativeTokenUsd)
+  return out.filter(
+    (c) =>
+      c.startSymbol === "USDC" ||
+      c.mid1Symbol === "WMATIC" ||
+      c.mid2Symbol === "WMATIC"
   );
 }
 
-async function hasHealthyV2Pool(
-  provider,
-  dex,
-  tokenA,
-  tokenB,
-  nativeTokenUsd,
-  cache
-) {
-  const key = `v2:${dex.factory}:${tokenA.address}:${tokenB.address}`;
-  if (cache.has(key)) return cache.get(key);
+// ---------- Multicall builders ----------
+function makePairKey(dexName, a, b, extra = "") {
+  return `${dexName}|${a.toLowerCase()}|${b.toLowerCase()}|${extra}`;
+}
 
-  try {
-    const pairInfo = await v2PairInfo(
+async function batchDiscoverPools(provider, dexes, universe) {
+  const calls = [];
+  const meta = [];
+
+  for (const dex of dexes) {
+    for (const a of universe) {
+      for (const b of universe) {
+        if (a.address.toLowerCase() === b.address.toLowerCase()) continue;
+        if (a.address.toLowerCase() > b.address.toLowerCase()) continue;
+
+        if (dex.kind === "v2") {
+          const { iface, callData } = encodeCall(V2_FACTORY_ABI, "getPair", [
+            a.address,
+            b.address,
+          ]);
+          calls.push({
+            target: dex.factory,
+            allowFailure: true,
+            callData,
+          });
+          meta.push({ type: "v2-pair", dex, a, b, iface });
+        } else {
+          const { iface, callData } = encodeCall(V3_FACTORY_ABI, "getPool", [
+            a.address,
+            b.address,
+            dex.fee,
+          ]);
+          calls.push({
+            target: dex.factory,
+            allowFailure: true,
+            callData,
+          });
+          meta.push({ type: "v3-pool", dex, a, b, iface });
+        }
+      }
+    }
+  }
+
+  const discovered = new Map();
+
+  for (const batch of chunk(calls.map((c, i) => ({ call: c, meta: meta[i] })), quoteBatchSize())) {
+    const results = await aggregate3(
       provider,
-      dex.factory,
-      tokenA.address,
-      tokenB.address
-    );
-    if (!pairInfo) {
-      cache.set(key, null);
-      return null;
-    }
-
-    const reserveUsd = v2ReserveUsdEstimate(pairInfo, tokenA, tokenB, nativeTokenUsd);
-    if (reserveUsd < minV2ReserveUsd()) {
-      cache.set(key, null);
-      return null;
-    }
-
-    const out = { pairInfo, reserveUsd };
-    cache.set(key, out);
-    return out;
-  } catch {
-    cache.set(key, null);
-    return null;
-  }
-}
-
-async function hasHealthyV3Pool(provider, dex, tokenA, tokenB, cache) {
-  const key = `v3:${dex.factory}:${tokenA.address}:${tokenB.address}:${dex.fee}`;
-  if (cache.has(key)) return cache.get(key);
-
-  try {
-    const factory = new ethers.Contract(dex.factory, V3_FACTORY_ABI, provider);
-    const poolAddress = await factory.getPool(
-      tokenA.address,
-      tokenB.address,
-      dex.fee
+      batch.map((x) => x.call),
+      rpcCallTimeoutMs()
     );
 
-    if (!poolAddress || poolAddress === ethers.constants.AddressZero) {
-      cache.set(key, null);
-      return null;
+    batch.forEach((item, idx) => {
+      const res = results[idx];
+      if (!res.success) return;
+
+      try {
+        const decoded =
+          item.meta.type === "v2-pair"
+            ? decodeCallResult(item.meta.iface, "getPair", res.returnData)
+            : decodeCallResult(item.meta.iface, "getPool", res.returnData);
+
+        const addr = decoded[0];
+        if (!addr || addr === ethers.constants.AddressZero) return;
+
+        const key = makePairKey(
+          item.meta.dex.name,
+          item.meta.a.address,
+          item.meta.b.address,
+          item.meta.dex.kind === "v3" ? item.meta.dex.fee : ""
+        );
+
+        discovered.set(key, {
+          dex: item.meta.dex,
+          a: item.meta.a,
+          b: item.meta.b,
+          address: addr,
+        });
+      } catch {}
+    });
+  }
+
+  return discovered;
+}
+
+async function batchFetchPoolHealth(provider, discovered, nativeTokenUsd) {
+  const reserveCalls = [];
+  const reserveMeta = [];
+
+  for (const [, info] of discovered.entries()) {
+    if (info.dex.kind === "v2") {
+      const c1 = encodeCall(V2_PAIR_ABI, "getReserves", []);
+      reserveCalls.push({
+        target: info.address,
+        allowFailure: true,
+        callData: c1.callData,
+      });
+      reserveMeta.push({ type: "reserves", info, iface: c1.iface });
+
+      const c2 = encodeCall(V2_PAIR_ABI, "token0", []);
+      reserveCalls.push({
+        target: info.address,
+        allowFailure: true,
+        callData: c2.callData,
+      });
+      reserveMeta.push({ type: "token0", info, iface: c2.iface });
+
+      const c3 = encodeCall(V2_PAIR_ABI, "token1", []);
+      reserveCalls.push({
+        target: info.address,
+        allowFailure: true,
+        callData: c3.callData,
+      });
+      reserveMeta.push({ type: "token1", info, iface: c3.iface });
+    } else {
+      const c = encodeCall(V3_POOL_ABI, "liquidity", []);
+      reserveCalls.push({
+        target: info.address,
+        allowFailure: true,
+        callData: c.callData,
+      });
+      reserveMeta.push({ type: "liquidity", info, iface: c.iface });
     }
+  }
 
-    const pool = new ethers.Contract(poolAddress, V3_POOL_ABI, provider);
-    const liquidity = bn(await pool.liquidity());
+  const hydrated = new Map();
+  const temp = new Map();
 
-    if (liquidity.lt(minV3LiquidityRaw())) {
-      cache.set(key, null);
-      return null;
+  for (const batch of chunk(reserveCalls.map((c, i) => ({ call: c, meta: reserveMeta[i] })), quoteBatchSize())) {
+    const results = await aggregate3(
+      provider,
+      batch.map((x) => x.call),
+      rpcCallTimeoutMs()
+    );
+
+    batch.forEach((item, idx) => {
+      const res = results[idx];
+      const baseKey = makePairKey(
+        item.meta.info.dex.name,
+        item.meta.info.a.address,
+        item.meta.info.b.address,
+        item.meta.info.dex.kind === "v3" ? item.meta.info.dex.fee : ""
+      );
+
+      if (!temp.has(baseKey)) temp.set(baseKey, { ...item.meta.info });
+
+      if (!res.success) return;
+
+      try {
+        if (item.meta.type === "reserves") {
+          const decoded = decodeCallResult(item.meta.iface, "getReserves", res.returnData);
+          temp.get(baseKey).reserve0 = bn(decoded[0]);
+          temp.get(baseKey).reserve1 = bn(decoded[1]);
+        } else if (item.meta.type === "token0") {
+          const decoded = decodeCallResult(item.meta.iface, "token0", res.returnData);
+          temp.get(baseKey).token0 = decoded[0];
+        } else if (item.meta.type === "token1") {
+          const decoded = decodeCallResult(item.meta.iface, "token1", res.returnData);
+          temp.get(baseKey).token1 = decoded[0];
+        } else if (item.meta.type === "liquidity") {
+          const decoded = decodeCallResult(item.meta.iface, "liquidity", res.returnData);
+          temp.get(baseKey).liquidity = bn(decoded[0]);
+        }
+      } catch {}
+    });
+  }
+
+  for (const [key, info] of temp.entries()) {
+    if (info.dex.kind === "v2") {
+      if (!info.reserve0 || !info.reserve1 || !info.token0 || !info.token1) continue;
+
+      const t0 = info.token0.toLowerCase();
+      const reserveA = t0 === info.a.address.toLowerCase() ? info.reserve0 : info.reserve1;
+      const reserveB = t0 === info.b.address.toLowerCase() ? info.reserve0 : info.reserve1;
+
+      const reserveUsd =
+        rawToUsd(info.a.symbol, reserveA, nativeTokenUsd) +
+        rawToUsd(info.b.symbol, reserveB, nativeTokenUsd);
+
+      if (reserveUsd < minV2ReserveUsd()) continue;
+
+      hydrated.set(key, {
+        ...info,
+        reserveUsd,
+      });
+    } else {
+      if (!info.liquidity || info.liquidity.lt(minV3LiquidityRaw())) continue;
+      hydrated.set(key, info);
     }
-
-    const out = { poolAddress, liquidity: liquidity.toString() };
-    cache.set(key, out);
-    return out;
-  } catch {
-    cache.set(key, null);
-    return null;
   }
+
+  return hydrated;
 }
 
-// ---------- Quote helpers ----------
-async function quoteV2(provider, dex, amountInRaw, tokenIn, tokenOut) {
-  const router = new ethers.Contract(dex.router, V2_ROUTER_ABI, provider);
-  const amounts = await router.getAmountsOut(amountInRaw, [tokenIn, tokenOut]);
-  if (!Array.isArray(amounts) || amounts.length < 2) {
-    throw new Error("BAD_V2_QUOTE");
+async function batchQuoteEdges(provider, healthyPools, usdSizes, nativeTokenUsd) {
+  const calls = [];
+  const meta = [];
+
+  for (const [, info] of healthyPools.entries()) {
+    for (const size of usdSizes) {
+      const amountInRawA = parseAmountUsdToRaw(info.a.symbol, size, nativeTokenUsd);
+      const amountInRawB = parseAmountUsdToRaw(info.b.symbol, size, nativeTokenUsd);
+
+      if (info.dex.kind === "v2") {
+        const c1 = encodeCall(V2_ROUTER_ABI, "getAmountsOut", [
+          amountInRawA,
+          [info.a.address, info.b.address],
+        ]);
+        calls.push({
+          target: info.dex.router,
+          allowFailure: true,
+          callData: c1.callData,
+        });
+        meta.push({
+          dex: info.dex,
+          from: info.a,
+          to: info.b,
+          amountInRaw: amountInRawA,
+          size,
+          iface: c1.iface,
+          fn: "getAmountsOut",
+        });
+
+        const c2 = encodeCall(V2_ROUTER_ABI, "getAmountsOut", [
+          amountInRawB,
+          [info.b.address, info.a.address],
+        ]);
+        calls.push({
+          target: info.dex.router,
+          allowFailure: true,
+          callData: c2.callData,
+        });
+        meta.push({
+          dex: info.dex,
+          from: info.b,
+          to: info.a,
+          amountInRaw: amountInRawB,
+          size,
+          iface: c2.iface,
+          fn: "getAmountsOut",
+        });
+      } else {
+        const c1 = encodeCall(V3_QUOTER_V2_ABI, "quoteExactInputSingle", [
+          {
+            tokenIn: info.a.address,
+            tokenOut: info.b.address,
+            amountIn: amountInRawA,
+            fee: info.dex.fee,
+            sqrtPriceLimitX96: 0,
+          },
+        ]);
+        calls.push({
+          target: info.dex.quoter,
+          allowFailure: true,
+          callData: c1.callData,
+        });
+        meta.push({
+          dex: info.dex,
+          from: info.a,
+          to: info.b,
+          amountInRaw: amountInRawA,
+          size,
+          iface: c1.iface,
+          fn: "quoteExactInputSingle",
+        });
+
+        const c2 = encodeCall(V3_QUOTER_V2_ABI, "quoteExactInputSingle", [
+          {
+            tokenIn: info.b.address,
+            tokenOut: info.a.address,
+            amountIn: amountInRawB,
+            fee: info.dex.fee,
+            sqrtPriceLimitX96: 0,
+          },
+        ]);
+        calls.push({
+          target: info.dex.quoter,
+          allowFailure: true,
+          callData: c2.callData,
+        });
+        meta.push({
+          dex: info.dex,
+          from: info.b,
+          to: info.a,
+          amountInRaw: amountInRawB,
+          size,
+          iface: c2.iface,
+          fn: "quoteExactInputSingle",
+        });
+      }
+    }
   }
-  return bn(amounts[amounts.length - 1]);
+
+  const quotes = new Map();
+
+  for (const batch of chunk(calls.map((c, i) => ({ call: c, meta: meta[i] })), quoteBatchSize())) {
+    const results = await aggregate3(
+      provider,
+      batch.map((x) => x.call),
+      rpcCallTimeoutMs()
+    );
+
+    batch.forEach((item, idx) => {
+      const res = results[idx];
+      if (!res.success) return;
+
+      try {
+        const decoded = decodeCallResult(item.meta.iface, item.meta.fn, res.returnData);
+        const amountOut =
+          item.meta.fn === "getAmountsOut"
+            ? bn(decoded[0][decoded[0].length - 1])
+            : bn(decoded[0]?.amountOut || decoded[0]);
+
+        if (!amountOut || amountOut.lte(0)) return;
+
+        const key = [
+          item.meta.dex.name,
+          item.meta.from.address.toLowerCase(),
+          item.meta.to.address.toLowerCase(),
+          item.meta.size,
+        ].join("|");
+
+        quotes.set(key, {
+          dex: item.meta.dex,
+          from: item.meta.from,
+          to: item.meta.to,
+          size: item.meta.size,
+          amountInRaw: item.meta.amountInRaw,
+          amountOutRaw: amountOut,
+        });
+      } catch {}
+    });
+  }
+
+  return quotes;
 }
 
-async function quoteV3(provider, dex, amountInRaw, tokenIn, tokenOut) {
-  const quoter = new ethers.Contract(dex.quoter, V3_QUOTER_V2_ABI, provider);
-  const result = await quoter.callStatic.quoteExactInputSingle({
-    tokenIn,
-    tokenOut,
-    amountIn: amountInRaw,
-    fee: dex.fee,
-    sqrtPriceLimitX96: 0,
-  });
-
-  return bn(result.amountOut || result[0]);
+// ---------- Route assembly ----------
+function getQuote(quotes, dexName, from, to, size) {
+  return quotes.get([dexName, from.toLowerCase(), to.toLowerCase(), size].join("|")) || null;
 }
 
-async function quoteDex(provider, dex, amountInRaw, tokenIn, tokenOut) {
-  if (dex.kind === "v2") {
-    return quoteV2(provider, dex, amountInRaw, tokenIn, tokenOut);
-  }
-  if (dex.kind === "v3") {
-    return quoteV3(provider, dex, amountInRaw, tokenIn, tokenOut);
-  }
-  throw new Error(`UNSUPPORTED_DEX_KIND:${dex.kind}`);
-}
-
-// ---------- Main ----------
 async function getOptimalQuote({
   chainKey,
   provider,
@@ -429,165 +698,85 @@ async function getOptimalQuote({
   const startedAt = Date.now();
   const chain = getChain(chainKey);
   const dexes = buildDexCatalog(chain);
-  const pairs = buildTokenPairs(chain);
-  const poolCache = new Map();
+  const universe = buildTokenUniverse(chain);
+  const twoLegPairs = buildTwoLegPairs(universe);
+  const cycles = buildTriangularCycles(universe);
+  const usdSizes = [
+    Number(amountInUsd || process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || 5)
+  ].filter((n) => Number.isFinite(n) && n > 0);
 
-  if (!dexes.length) {
-    return { ok: false, reason: "NO_DEXES", bestRoute: null, routes: [] };
-  }
-  if (!pairs.length) {
-    return { ok: false, reason: "NO_PAIRS", bestRoute: null, routes: [] };
+  if (!dexes.length) return { ok: false, reason: "NO_DEXES", bestRoute: null, routes: [] };
+  if (!universe.length) return { ok: false, reason: "NO_TOKENS", bestRoute: null, routes: [] };
+
+  if (!withinBudget(startedAt)) {
+    return { ok: false, reason: "QUOTE_TIMEOUT", bestRoute: null, routes: [] };
   }
 
-  let gasUsd;
-  try {
-    gasUsd = await getGasUsd(provider, nativeTokenUsd);
-  } catch {
-    gasUsd = Number(process.env.GAS_USD_FALLBACK || 0.03);
+  const discovered = await batchDiscoverPools(provider, dexes, universe);
+  if (!withinBudget(startedAt)) {
+    return { ok: false, reason: "QUOTE_TIMEOUT", bestRoute: null, routes: [] };
+  }
+
+  const healthyPools = await batchFetchPoolHealth(provider, discovered, nativeTokenUsd);
+  if (!withinBudget(startedAt)) {
+    return { ok: false, reason: "QUOTE_TIMEOUT", bestRoute: null, routes: [] };
+  }
+
+  const quotes = await batchQuoteEdges(provider, healthyPools, usdSizes, nativeTokenUsd);
+  if (!withinBudget(startedAt)) {
+    return { ok: false, reason: "QUOTE_TIMEOUT", bestRoute: null, routes: [] };
   }
 
   const routes = [];
   const seen = new Set();
-  const usdSizes = getProbeUsdSizes(amountInUsd);
 
-  for (const pair of pairs) {
-    if (!withinBudget(startedAt)) {
-      return {
-        ok: false,
-        reason: "QUOTE_TIMEOUT",
-        bestRoute: null,
-        routes: [],
-      };
-    }
-
-    const tokenInRef = { symbol: pair.tokenInSymbol, address: pair.tokenIn };
-    const tokenOutRef = { symbol: pair.tokenOutSymbol, address: pair.tokenOut };
-
-    for (const usdSize of usdSizes) {
-      const amountInRaw = parseAmountUsdToRaw(
-        pair.tokenInSymbol,
-        usdSize,
-        nativeTokenUsd
-      );
-
+  for (const size of usdSizes) {
+    for (const pair of twoLegPairs) {
       for (const buyDex of dexes) {
-        if (!withinBudget(startedAt)) break;
-
-        let buyPoolOk = null;
-        if (buyDex.kind === "v2") {
-          buyPoolOk = await hasHealthyV2Pool(
-            provider,
-            buyDex,
-            tokenInRef,
-            tokenOutRef,
-            nativeTokenUsd,
-            poolCache
-          );
-        } else {
-          buyPoolOk = await hasHealthyV3Pool(
-            provider,
-            buyDex,
-            tokenInRef,
-            tokenOutRef,
-            poolCache
-          );
-        }
-        if (!buyPoolOk) continue;
-
-        let leg1Out;
-        try {
-          leg1Out = await quoteDex(
-            provider,
-            buyDex,
-            amountInRaw,
-            pair.tokenIn,
-            pair.tokenOut
-          );
-        } catch {
-          continue;
-        }
-
-        if (!leg1Out || leg1Out.lte(0)) continue;
+        const q1 = getQuote(quotes, buyDex.name, pair.tokenIn, pair.tokenOut, size);
+        if (!q1) continue;
 
         for (const sellDex of dexes) {
-          if (!withinBudget(startedAt)) break;
-          if (buyDex.name === sellDex.name) continue;
+          if (sellDex.name === buyDex.name) continue;
+          const q2 = getQuote(quotes, sellDex.name, pair.tokenOut, pair.tokenIn, size);
+          if (!q2) continue;
 
-          let sellPoolOk = null;
-          if (sellDex.kind === "v2") {
-            sellPoolOk = await hasHealthyV2Pool(
-              provider,
-              sellDex,
-              tokenOutRef,
-              tokenInRef,
-              nativeTokenUsd,
-              poolCache
-            );
-          } else {
-            sellPoolOk = await hasHealthyV3Pool(
-              provider,
-              sellDex,
-              tokenOutRef,
-              tokenInRef,
-              poolCache
-            );
-          }
-          if (!sellPoolOk) continue;
-
-          let leg2Out;
+          const grossProfitTokenRaw = q2.amountOutRaw.sub(q1.amountInRaw);
+          const grossProfitUsd = rawToUsd(pair.tokenInSymbol, grossProfitTokenRaw, nativeTokenUsd);
+          const flashFeeRaw = q1.amountInRaw.mul(flashPremiumBps()).div(10000);
+          const flashFeeUsd = rawToUsd(pair.tokenInSymbol, flashFeeRaw, nativeTokenUsd);
+          
+          let gasUsd;
           try {
-            leg2Out = await quoteDex(
-              provider,
-              sellDex,
-              leg1Out,
-              pair.tokenOut,
-              pair.tokenIn
-            );
+            gasUsd = await getGasUsd(provider, nativeTokenUsd, 2);
           } catch {
-            continue;
+            gasUsd = Number(process.env.GAS_USD_FALLBACK || 0.05);
           }
-
-          if (!leg2Out || leg2Out.lte(0)) continue;
-
-          const grossProfitTokenRaw = leg2Out.sub(amountInRaw);
-          const grossProfitUsd = rawToUsd(
-            pair.tokenInSymbol,
-            grossProfitTokenRaw,
-            nativeTokenUsd
-          );
-
-          const flashFeeRaw = amountInRaw.mul(flashPremiumBps()).div(10000);
-          const flashFeeUsd = rawToUsd(
-            pair.tokenInSymbol,
-            flashFeeRaw,
-            nativeTokenUsd
-          );
-
+          
           const netProfitUsd = grossProfitUsd - gasUsd - flashFeeUsd;
 
           const route = {
             id: routeId([
               chain.name,
+              "2LEG",
               pair.tokenInSymbol,
               pair.tokenOutSymbol,
               buyDex.name,
               sellDex.name,
-              String(usdSize),
+              String(size),
             ]),
             chain: chain.name,
+            shape: "2LEG",
             tokenIn: pair.tokenIn,
             tokenOut: pair.tokenOut,
             tokenInSymbol: pair.tokenInSymbol,
             tokenOutSymbol: pair.tokenOutSymbol,
-            amountInRaw: amountInRaw.toString(),
-            expectedAmountOutRaw: leg2Out.toString(),
+            amountInRaw: q1.amountInRaw.toString(),
+            expectedAmountOutRaw: q2.amountOutRaw.toString(),
             grossProfitTokenRaw: grossProfitTokenRaw.toString(),
             minProfitTokenRaw: usdToMinProfitRaw(
               pair.tokenInSymbol,
-              Math.max(
-                Number(process.env.MIN_NET_PROFIT_USD || process.env.MIN_PROFIT_USD || 0.01),
-                0.000001
-              ),
+              Math.max(Number(process.env.MIN_NET_PROFIT_USD || 0.01), 0.000001),
               nativeTokenUsd
             ).toString(),
             grossProfitUsd,
@@ -600,27 +789,130 @@ async function getOptimalQuote({
                 dex: buyDex,
                 tokenIn: pair.tokenIn,
                 tokenOut: pair.tokenOut,
-                amountInRaw,
-                quotedOutRaw: leg1Out,
+                amountInRaw: q1.amountInRaw,
+                quotedOutRaw: q1.amountOutRaw,
               }),
               buildLeg({
                 dex: sellDex,
                 tokenIn: pair.tokenOut,
                 tokenOut: pair.tokenIn,
-                amountInRaw: leg1Out,
-                quotedOutRaw: leg2Out,
+                amountInRaw: q1.amountOutRaw,
+                quotedOutRaw: q2.amountOutRaw,
               }),
             ],
             metadata: {
+              amountInUsd: size,
               buyDex: buyDex.name,
               sellDex: sellDex.name,
-              amountInUsd: usdSize,
             },
           };
 
           if (!seen.has(route.id)) {
             seen.add(route.id);
             routes.push(route);
+          }
+        }
+      }
+    }
+
+    for (const cycle of cycles) {
+      for (const dex1 of dexes) {
+        const q1 = getQuote(quotes, dex1.name, cycle.start, cycle.mid1, size);
+        if (!q1) continue;
+
+        for (const dex2 of dexes) {
+          const q2Direct = getQuote(quotes, dex2.name, cycle.mid1, cycle.mid2, size);
+          if (!q2Direct) continue;
+
+          // rescale leg 2 by actual output of leg 1 is not yet exact in this stage,
+          // so we only keep routes where the fixed-size quote is directionally promising.
+          // exact dynamic batching is Stage 4.
+          for (const dex3 of dexes) {
+            const q3Direct = getQuote(quotes, dex3.name, cycle.mid2, cycle.start, size);
+            if (!q3Direct) continue;
+
+            const grossProfitTokenRaw = q3Direct.amountOutRaw.sub(q1.amountInRaw);
+            const grossProfitUsd = rawToUsd(cycle.startSymbol, grossProfitTokenRaw, nativeTokenUsd);
+            const flashFeeRaw = q1.amountInRaw.mul(flashPremiumBps()).div(10000);
+            const flashFeeUsd = rawToUsd(cycle.startSymbol, flashFeeRaw, nativeTokenUsd);
+            
+            let gasUsd;
+            try {
+              gasUsd = await getGasUsd(provider, nativeTokenUsd, 3);
+            } catch {
+              gasUsd = Number(process.env.GAS_USD_FALLBACK_3LEG || 0.08);
+            }
+            
+            const netProfitUsd = grossProfitUsd - gasUsd - flashFeeUsd;
+
+            const route = {
+              id: routeId([
+                chain.name,
+                "3LEG",
+                cycle.startSymbol,
+                cycle.mid1Symbol,
+                cycle.mid2Symbol,
+                dex1.name,
+                dex2.name,
+                dex3.name,
+                String(size),
+              ]),
+              chain: chain.name,
+              shape: "3LEG",
+              tokenIn: cycle.start,
+              tokenOut: cycle.start,
+              tokenInSymbol: cycle.startSymbol,
+              tokenOutSymbol: cycle.startSymbol,
+              amountInRaw: q1.amountInRaw.toString(),
+              expectedAmountOutRaw: q3Direct.amountOutRaw.toString(),
+              grossProfitTokenRaw: grossProfitTokenRaw.toString(),
+              minProfitTokenRaw: usdToMinProfitRaw(
+                cycle.startSymbol,
+                Math.max(Number(process.env.MIN_NET_PROFIT_USD || 0.01), 0.000001),
+                nativeTokenUsd
+              ).toString(),
+              grossProfitUsd,
+              gasUsd,
+              flashFeeUsd,
+              netProfitUsd,
+              deadline: getDeadline(),
+              legs: [
+                buildLeg({
+                  dex: dex1,
+                  tokenIn: cycle.start,
+                  tokenOut: cycle.mid1,
+                  amountInRaw: q1.amountInRaw,
+                  quotedOutRaw: q1.amountOutRaw,
+                }),
+                buildLeg({
+                  dex: dex2,
+                  tokenIn: cycle.mid1,
+                  tokenOut: cycle.mid2,
+                  amountInRaw: q2Direct.amountInRaw,
+                  quotedOutRaw: q2Direct.amountOutRaw,
+                }),
+                buildLeg({
+                  dex: dex3,
+                  tokenIn: cycle.mid2,
+                  tokenOut: cycle.start,
+                  amountInRaw: q3Direct.amountInRaw,
+                  quotedOutRaw: q3Direct.amountOutRaw,
+                }),
+              ],
+              metadata: {
+                amountInUsd: size,
+                dex1: dex1.name,
+                dex2: dex2.name,
+                dex3: dex3.name,
+                pivot: "WMATIC",
+                note: "Stage 3 batched triangular approximation; exact propagated sizing comes next.",
+              },
+            };
+
+            if (!seen.has(route.id)) {
+              seen.add(route.id);
+              routes.push(route);
+            }
           }
         }
       }
@@ -637,11 +929,11 @@ async function getOptimalQuote({
     ok: !!bestRoute,
     reason: bestRoute ? null : "NO_ROUTE",
     bestRoute,
-    routes: positive.slice(0, 25),
+    routes: positive.slice(0, 50),
   };
 }
 
-// Compatibility shim for older imports
+// Compatibility shim
 class QuoteEngine {
   constructor(providers = {}) {
     this.providers = providers;
