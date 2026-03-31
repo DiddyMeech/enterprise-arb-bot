@@ -82,11 +82,23 @@ async function simulate({ chainKey, amountInUsd, nativeTokenUsd }) {
 if (require.main === module) {
   (async () => {
     const chainKey = process.env.ACTIVE_DEPLOY_CHAIN || 'polygon';
-    const amountInUsd = Number(process.env.DRY_RUN_USD || process.env.TRADE_USD_HINT || '25');
     const nativeTokenUsd = Number(process.env.ETH_PRICE_USD_HINT || '2200');
-    const result = await simulate({ chainKey, amountInUsd, nativeTokenUsd });
-    console.log(JSON.stringify(result, null, 2));
-    process.exit(result.ok ? 0 : 1);
+    
+    // Check multiple sizes for thin margins
+    const sizes = [5, 10, 25, 50, 100];
+    let bestResult = { ok: false, reason: 'NO_ROUTE' };
+
+    for (const size of sizes) {
+      console.log(`[simulator] trying trade size: $${size}`);
+      const result = await simulate({ chainKey, amountInUsd: size, nativeTokenUsd });
+      if (result.ok) {
+        bestResult = result;
+        break;
+      }
+    }
+
+    console.log(JSON.stringify(bestResult, null, 2));
+    process.exit(bestResult.ok ? 0 : 1);
   })().catch((err) => {
     console.error('[simulator] fatal', err);
     process.exit(1);

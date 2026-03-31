@@ -20,13 +20,13 @@ async function main() {
     flashExecutorAddress
   );
 
-  const usdc = chain.tokens.USDC.address;
-  const usdcBridged = chain.tokens.USDC_BRIDGED?.address;
-  const weth = chain.tokens.WETH.address;
-  const wmatic = chain.tokens.WMATIC?.address;
-  const quickswap = chain.dexes.quickswap?.router;
-  const sushi = chain.dexes.sushi.router;
-  const univ3 = chain.dexes.univ3.router;
+  const usdc = chain.tokens.USDC;
+  const usdcBridged = chain.tokens["USDC.e"] || chain.tokens.USDC_BRIDGED;
+  const weth = chain.tokens.WETH;
+  const wmatic = chain.tokens.WMATIC;
+  const quickswap = chain.routers?.quickswap || chain.dexes?.quickswap?.router;
+  const sushi = chain.routers?.sushi || chain.dexes?.sushi?.router;
+  const univ3 = chain.routers?.univ3 || chain.dexes?.univ3?.router;
 
   console.log('[whitelist] contract=', flashExecutorAddress);
 
