@@ -75,36 +75,110 @@ function getStaticSpokes() {
     .filter(Boolean);
 }
 
+// Minimum market cap (USD) a spoke token must have to be included.
+// This filters out micro-caps / meme coins that have no real on-chain liquidity.
+const MIN_SPOKE_MARKET_CAP_USD = 1_000_000; // $1 M floor
+
+// Fallback: well-known liquid Polygon ERC-20s used when CoinGecko is unreachable.
+const FALLBACK_SPOKE_TOKENS = [
+  { symbol: "LINK",  address: "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39" },
+  { symbol: "AAVE",  address: "0xD6DF932A45C0f255f85145f286eA0b292B21C90B" },
+  { symbol: "CRV",   address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF" },
+  { symbol: "BAL",   address: "0x9a71012B13CA4d3D0Cdc72A177DF3ef03b0E76A7" },
+  { symbol: "GHO",   address: "0x97Ab79B80Fa4a12D90b6be11C5A8d4E4F73cEBb2" },
+  { symbol: "stMATIC", address: "0x3A58a54C066FdC0f2D55FC9C89F0415C92eBf3C6" },
+  { symbol: "MaticX", address: "0xfa68FB4628DFF1028CFEc22b4162FCcd0d45efb6" },
+  { symbol: "SAND",  address: "0xBbba073C31bF03b8ACf7c28EF0738DeCF3695683" },
+  { symbol: "GHST",  address: "0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7" },
+  { symbol: "QUICK", address: "0xB5C064F955D8e7F38fE0460C556a72987494eE17" },
+  { symbol: "DPI",   address: "0x85955046DF4668e1DD369D2DE9f3AEB98DD2A369" },
+  { symbol: "MKR",   address: "0x6f7C932e7684666C9fd1d44527765433e01fF61d" },
+  { symbol: "SUSHI", address: "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a" },
+  { symbol: "SNX",   address: "0x50B728D8D964fd00C2d0AAD81718b71311feF68a" },
+  { symbol: "FXS",   address: "0x3e121107F6F22DA4911079845a470757aF4e1A1b" },
+];
+
 async function fetchDynamicSpokes(targetCount = 120) {
   try {
-    const response = await fetch(COINGECKO_POLYGON_LIST);
+    // CoinGecko's /all.json list does not include market cap data.
+    // We use the markets endpoint for top Polygon tokens sorted by market cap.
+    const marketsUrl =
+      "https://api.coingecko.com/api/v3/coins/markets" +
+      "?vs_currency=usd&category=polygon-ecosystem&order=market_cap_desc" +
+      `&per_page=${Math.min(targetCount * 3, 250)}&page=1` +
+      "&sparkline=false&price_change_percentage=24h";
+
+    const response = await fetch(marketsUrl, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+
     if (!response.ok) {
       throw new Error(`HTTP_${response.status}`);
     }
 
-    const data = await response.json();
-    const allTokens = Array.isArray(data.tokens) ? data.tokens : [];
+    const coins = await response.json();
+    if (!Array.isArray(coins) || coins.length === 0) {
+      throw new Error("EMPTY_MARKETS_RESPONSE");
+    }
+
     const hubAddresses = Object.values(HUB_TOKENS).map((a) => a.toLowerCase());
 
-    const validSpokes = allTokens.filter((t) => {
-      if (!t || Number(t.chainId) !== 137) return false;
-      if (!t.address || !t.symbol) return false;
-      if (hubAddresses.includes(String(t.address).toLowerCase())) return false;
-      return true;
-    });
+    const validSpokes = [];
+    for (const coin of coins) {
+      // Must have a Polygon contract address
+      const raw =
+        coin?.platforms?.["polygon-pos"] ||
+        coin?.platforms?.["polygon"] ||
+        "";
+      if (!raw) continue;
 
-    return validSpokes.slice(0, targetCount).map((t) => ({
-      symbol: String(t.symbol).toUpperCase(),
+      let address;
+      try {
+        address = ethers.utils.getAddress(raw);
+      } catch {
+        continue;
+      }
+
+      if (hubAddresses.includes(address.toLowerCase())) continue;
+
+      // Enforce market-cap floor to exclude micro-caps
+      const mcap = Number(coin.market_cap);
+      if (!mcap || mcap < MIN_SPOKE_MARKET_CAP_USD) continue;
+
+      validSpokes.push({
+        symbol: String(coin.symbol).toUpperCase(),
+        address,
+        isHub: false,
+        source: "coingecko-markets",
+        marketCapUsd: mcap,
+      });
+
+      if (validSpokes.length >= targetCount) break;
+    }
+
+    if (validSpokes.length === 0) {
+      throw new Error("NO_VALID_SPOKES_AFTER_FILTER");
+    }
+
+    console.log(
+      `[dynamic-universe] fetched ${validSpokes.length} liquid spokes` +
+        ` (min mcap $${(MIN_SPOKE_MARKET_CAP_USD / 1e6).toFixed(1)}M)`
+    );
+    return validSpokes;
+  } catch (error) {
+    console.warn(
+      "[dynamic-universe] FAILED_TO_FETCH_DYNAMIC_SPOKES:",
+      error.message,
+      "— using fallback spoke list"
+    );
+    // Return the hardcoded fallback so the universe is never empty
+    return FALLBACK_SPOKE_TOKENS.map((t) => ({
+      symbol: t.symbol,
       address: ethers.utils.getAddress(t.address),
       isHub: false,
-      source: "coingecko",
+      source: "fallback-hardcoded",
     }));
-  } catch (error) {
-    console.error(
-      "[dynamic-universe] FAILED_TO_FETCH_DYNAMIC_SPOKES:",
-      error.message
-    );
-    return [];
   }
 }
 

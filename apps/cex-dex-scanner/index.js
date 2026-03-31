@@ -1,4 +1,12 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+
+// Graceful disable: the DigitalOcean server IP is blocked by Binance (HTTP 451).
+// Set NODEMAVEN_USER + NODEMAVEN_PASS in .env and remove CEX_DEX_DISABLED to re-enable.
+if (process.env.CEX_DEX_DISABLED === 'true') {
+  console.log('[CEX-DEX] Scanner disabled (CEX_DEX_DISABLED=true). Add NodeMaven proxy credentials to re-enable.');
+  process.exit(0);
+}
+
 const WebSocket = require('ws');
 // Native Console Bounding
 const decisionEngine = require('@arb/trade-decision-engine');
